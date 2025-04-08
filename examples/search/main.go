@@ -6,9 +6,11 @@ import (
 	"log"
 	"os"
 
-	"github.com/linchong/agent/gastra/gostra/pkg/memory"
-	"github.com/linchong/agent/gastra/gostra/pkg/tools/document"
-	"github.com/linchong/agent/gastra/gostra/pkg/tools/search"
+	"github.com/yourusername/gostra/pkg/memory"
+	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/yourusername/gostra/pkg/tools/common"
+	"github.com/yourusername/gostra/pkg/tools/document"
+	"github.com/yourusername/gostra/pkg/tools/search"
 )
 
 func main() {
@@ -20,25 +22,32 @@ func main() {
 		log.Fatal("未设置OPENAI_API_KEY环境变量")
 	}
 
-	embeddingProvider := memory.NewOpenAIEmbeddingProvider(memory.OpenAIEmbeddingOptions{
+	embeddingProvider, err := memory.NewOpenAIEmbeddingProvider(&memory.OpenAIEmbeddingOptions{
 		APIKey:  openAIAPIKey,
 		Model:   "text-embedding-3-small",
 		BaseURL: "https://api.openai.com/v1",
 	})
+	if err != nil {
+		log.Fatalf("创建嵌入提供者失败: %v", err)
+	}
 
 	// 创建内存向量存储
-	vectorStore := memory.NewInMemoryVectorStore()
+	vectorStore := memory.NewInMemoryVectorStore(embeddingProvider)
 
 	// 创建文档分块工具
-	chunker := document.NewDocumentChunker()
-
-	// 创建文档解析器
-	parser := document.NewDocumentParser(document.ParserOptions{})
+	chunker := document.NewDocumentChunker(document.DocumentChunkerOptions{
+		DefaultParams: document.ChunkParams{
+			Strategy: document.StrategyFixed,
+			Size:     1000,
+			Overlap:  100,
+		},
+	})
 
 	// 创建向量搜索工具
 	vectorSearchTool := search.NewVectorSearchTool(search.VectorSearchOptions{
 		EmbeddingProvider: embeddingProvider,
-		VectorStore:       vectorStore,
+		Dimension:         1536,
+		StoreText:         true,
 	})
 
 	// 创建文档搜索工具
@@ -48,7 +57,7 @@ func main() {
 		EmbeddingProvider: embeddingProvider,
 		ChunkSize:         500,
 		ChunkOverlap:      50,
-		ChunkStrategy:     document.ChunkStrategyFixed,
+		ChunkStrategy:     common.ChunkStrategyFixed,
 	})
 
 	// 示例文档内容
@@ -97,17 +106,19 @@ func main() {
 		result, err := docSearchTool.Execute(map[string]interface{}{
 			"query": query,
 			"limit": float64(3),
-		}, ctx)
+		}, &tools.ExecuteOptions{
+			Context: ctx,
+		})
 		if err != nil {
 			log.Fatalf("搜索失败: %v", err)
 		}
 
 		// 处理结果
-		if searchResults, ok := result.([]search.SearchResult); ok {
+		if searchResults, ok := result.([]*search.VectorSearchResult); ok {
 			fmt.Printf("找到 %d 个结果:\n", len(searchResults))
 			for i, r := range searchResults {
-				fmt.Printf("%d. 文档ID: %s, 相似度: %.4f\n", i+1, r.DocumentID, r.Score)
-				fmt.Printf("   内容: %s\n", r.Content)
+				fmt.Printf("%d. 文档ID: %s, 相似度: %.4f\n", i+1, r.Chunk.DocumentID, r.Score)
+				fmt.Printf("   内容: %s\n", r.Chunk.Content)
 				fmt.Printf("   元数据: %v\n", r.Metadata)
 			}
 		} else {
@@ -117,9 +128,6 @@ func main() {
 
 	// 清除文档
 	fmt.Println("\n清除所有文档...")
-	err := docSearchTool.ClearDocuments()
-	if err != nil {
-		log.Fatalf("清除文档失败: %v", err)
-	}
+	docSearchTool.Clear()
 	fmt.Println("文档已清除")
 }

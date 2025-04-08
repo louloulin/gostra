@@ -10,51 +10,60 @@ import (
 	"github.com/yourusername/gostra/pkg/tools"
 )
 
-// ChunkStrategy 定义文档分块策略
+// ChunkStrategy defines the strategy for chunking documents
 type ChunkStrategy string
 
 const (
-	// StrategyRecursive 递归分块策略，根据分隔符分割
-	StrategyRecursive ChunkStrategy = "recursive"
-	// StrategyFixed 固定大小分块策略
+	// StrategyFixed chunks text into fixed-size segments
 	StrategyFixed ChunkStrategy = "fixed"
-	// StrategySentence 句子分块策略
-	StrategySentence ChunkStrategy = "sentence"
-	// StrategyParagraph 段落分块策略
+
+	// StrategyRecursive uses a recursive algorithm to split text
+	StrategyRecursive ChunkStrategy = "recursive"
+
+	// StrategyParagraph splits by paragraphs
 	StrategyParagraph ChunkStrategy = "paragraph"
+
+	// StrategySentence splits by sentences
+	StrategySentence ChunkStrategy = "sentence"
 )
 
-// ChunkParams 表示文档分块参数
+// ChunkParams represents the parameters for chunking a document
 type ChunkParams struct {
-	// 分块策略
+	// Strategy is the chunking strategy
 	Strategy ChunkStrategy `json:"strategy"`
-	// 块大小（字符数）
+	// Size is the size of each chunk
 	Size int `json:"size"`
-	// 块重叠（字符数）
+	// Overlap is the overlap between chunks
 	Overlap int `json:"overlap"`
-	// 分隔符（用于递归策略）
+	// Separator is the separator used for recursive strategy
 	Separator string `json:"separator"`
 }
 
-// DocumentChunk 表示文档的一个块
+// DocumentChunk represents a chunk of a document
 type DocumentChunk struct {
-	// 块内容
+	// Content is the text content of the chunk
 	Content string `json:"content"`
-	// 块在原文中的位置
-	Position int `json:"position"`
-	// 所属文档ID（如果有）
+
+	// DocumentID is the ID of the original document
 	DocumentID string `json:"document_id,omitempty"`
-	// 块元数据
+
+	// ChunkIndex is the index of this chunk in the original document
+	ChunkIndex int `json:"chunk_index"`
+
+	// Position is the character position in the original document
+	Position int `json:"position"`
+
+	// Metadata contains additional information about the chunk
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// DocumentChunkerOptions 定义文档分块工具的选项
+// DocumentChunkerOptions defines the options for the document chunker
 type DocumentChunkerOptions struct {
-	// 默认分块参数
+	// DefaultParams is the default chunking parameters
 	DefaultParams ChunkParams
 }
 
-// DocumentChunker 文档分块工具
+// DocumentChunker is the tool for chunking documents
 type DocumentChunker struct {
 	options DocumentChunkerOptions
 	id      string
@@ -62,9 +71,9 @@ type DocumentChunker struct {
 	schema  tools.Schema
 }
 
-// NewDocumentChunker 创建新的文档分块工具
+// NewDocumentChunker creates a new document chunker
 func NewDocumentChunker(options DocumentChunkerOptions) *DocumentChunker {
-	// 设置默认参数
+	// Set default parameters
 	if options.DefaultParams.Strategy == "" {
 		options.DefaultParams.Strategy = StrategyRecursive
 	}
@@ -75,59 +84,59 @@ func NewDocumentChunker(options DocumentChunkerOptions) *DocumentChunker {
 		options.DefaultParams.Separator = "\n"
 	}
 
-	// 创建输入模式
-	schema := tools.NewSimpleSchema(tools.TypeObject, "文档分块参数")
+	// Create input schema
+	schema := tools.NewSimpleSchema(tools.TypeObject, "Document chunking parameters")
 
-	contentSchema := tools.NewSimpleSchema(tools.TypeString, "要分块的文档内容")
+	contentSchema := tools.NewSimpleSchema(tools.TypeString, "Content of the document to be chunked")
 	schema.AddProperty("content", contentSchema, true)
 
-	strategySchema := tools.NewSimpleSchema(tools.TypeString, "分块策略：recursive, fixed, sentence, paragraph")
+	strategySchema := tools.NewSimpleSchema(tools.TypeString, "Chunking strategy: recursive, fixed, sentence, paragraph")
 	schema.AddProperty("strategy", strategySchema, false)
 
-	sizeSchema := tools.NewSimpleSchema(tools.TypeInteger, "块大小（字符数）")
+	sizeSchema := tools.NewSimpleSchema(tools.TypeInteger, "Chunk size (in characters)")
 	schema.AddProperty("size", sizeSchema, false)
 
-	overlapSchema := tools.NewSimpleSchema(tools.TypeInteger, "块重叠（字符数）")
+	overlapSchema := tools.NewSimpleSchema(tools.TypeInteger, "Chunk overlap (in characters)")
 	schema.AddProperty("overlap", overlapSchema, false)
 
-	separatorSchema := tools.NewSimpleSchema(tools.TypeString, "分隔符（用于递归策略）")
+	separatorSchema := tools.NewSimpleSchema(tools.TypeString, "Separator (for recursive strategy)")
 	schema.AddProperty("separator", separatorSchema, false)
 
 	return &DocumentChunker{
 		options: options,
 		id:      "document_chunker",
-		desc:    "将文档分割成较小的块，用于进一步处理或嵌入",
+		desc:    "Splits a document into smaller chunks for further processing or embedding",
 		schema:  schema,
 	}
 }
 
-// GetID 返回工具ID
+// GetID returns the tool ID
 func (c *DocumentChunker) GetID() string {
 	return c.id
 }
 
-// GetDescription 返回工具描述
+// GetDescription returns the tool description
 func (c *DocumentChunker) GetDescription() string {
 	return c.desc
 }
 
-// GetInputSchema 返回输入架构
+// GetInputSchema returns the input schema
 func (c *DocumentChunker) GetInputSchema() tools.Schema {
 	return c.schema
 }
 
-// Execute 执行工具
+// Execute executes the tool
 func (c *DocumentChunker) Execute(params map[string]interface{}, options *tools.ExecuteOptions) (interface{}, error) {
-	// 获取文档内容
+	// Get document content
 	content, ok := params["content"].(string)
 	if !ok || content == "" {
-		return nil, errors.New("必须提供非空的文档内容")
+		return nil, errors.New("must provide non-empty document content")
 	}
 
-	// 设置分块参数
+	// Set chunking parameters
 	chunkParams := c.options.DefaultParams
 
-	// 覆盖默认参数
+	// Override default parameters
 	if strategy, ok := params["strategy"].(string); ok && strategy != "" {
 		chunkParams.Strategy = ChunkStrategy(strategy)
 	}
@@ -141,16 +150,16 @@ func (c *DocumentChunker) Execute(params map[string]interface{}, options *tools.
 		chunkParams.Separator = separator
 	}
 
-	// 根据策略分块
+	// Chunk document based on strategy
 	chunks, err := c.chunkDocument(content, chunkParams)
 	if err != nil {
-		return nil, fmt.Errorf("分块文档失败: %w", err)
+		return nil, fmt.Errorf("chunking document failed: %w", err)
 	}
 
 	return chunks, nil
 }
 
-// chunkDocument 根据策略将文档分块
+// chunkDocument chunks the document based on the strategy
 func (c *DocumentChunker) chunkDocument(content string, params ChunkParams) ([]*DocumentChunk, error) {
 	switch params.Strategy {
 	case StrategyRecursive:
@@ -162,17 +171,17 @@ func (c *DocumentChunker) chunkDocument(content string, params ChunkParams) ([]*
 	case StrategyParagraph:
 		return c.chunkByParagraph(content, params.Size, params.Overlap)
 	default:
-		return nil, fmt.Errorf("不支持的分块策略: %s", params.Strategy)
+		return nil, fmt.Errorf("unsupported chunking strategy: %s", params.Strategy)
 	}
 }
 
-// chunkRecursive 递归分块，先按分隔符分割，如果块太大则继续分割
+// chunkRecursive recursively chunks text, splitting by separator
 func (c *DocumentChunker) chunkRecursive(content string, size int, overlap int, separator string) ([]*DocumentChunk, error) {
 	if content == "" {
 		return []*DocumentChunk{}, nil
 	}
 
-	// 定义分隔符列表，优先级从高到低
+	// Define separator list, with priority from high to low
 	separators := []string{separator}
 	if separator != "\n" {
 		separators = append(separators, "\n")
@@ -182,9 +191,9 @@ func (c *DocumentChunker) chunkRecursive(content string, size int, overlap int, 
 	return c.splitRecursive(content, size, overlap, separators, 0), nil
 }
 
-// splitRecursive 递归分割，如果当前分隔符无法满足大小要求，则尝试下一个分隔符
+// splitRecursive recursively splits text, trying each separator
 func (c *DocumentChunker) splitRecursive(content string, size int, overlap int, separators []string, position int) []*DocumentChunk {
-	// 如果内容已经小于块大小，直接返回
+	// If content is already smaller than chunk size, return
 	if len(content) <= size {
 		return []*DocumentChunk{
 			{
@@ -194,17 +203,17 @@ func (c *DocumentChunker) splitRecursive(content string, size int, overlap int, 
 		}
 	}
 
-	// 如果没有更多分隔符，直接按大小分割
+	// If no more separators, split by size
 	if len(separators) == 0 || separators[0] == "" {
 		chunks, _ := c.chunkFixed(content, size, overlap)
 		return chunks
 	}
 
-	// 尝试当前分隔符
+	// Try current separator
 	separator := separators[0]
 	parts := strings.Split(content, separator)
 
-	// 如果分隔符不能分割文本，尝试下一个分隔符
+	// If separator cannot split text, try next separator
 	if len(parts) == 1 {
 		return c.splitRecursive(content, size, overlap, separators[1:], position)
 	}
@@ -218,15 +227,15 @@ func (c *DocumentChunker) splitRecursive(content string, size int, overlap int, 
 			continue
 		}
 
-		// 添加分隔符（除了空字符串）
+		// Add separator (except empty string)
 		partWithSep := part
 		if separator != "" {
 			partWithSep = part + separator
 		}
 
-		// 如果当前块加上新部分超过大小，则需要进一步处理
+		// If current chunk plus new part exceeds size, need further processing
 		if len(currentChunk)+len(partWithSep) > size {
-			// 如果当前块非空，添加到结果
+			// If current chunk is not empty, add to result
 			if currentChunk != "" {
 				chunks = append(chunks, &DocumentChunk{
 					Content:  currentChunk,
@@ -235,22 +244,22 @@ func (c *DocumentChunker) splitRecursive(content string, size int, overlap int, 
 				currentPosition += len(currentChunk) - overlap
 			}
 
-			// 如果单个部分超过大小，递归处理
+			// If single part exceeds size, recursively process
 			if len(partWithSep) > size {
 				subChunks := c.splitRecursive(partWithSep, size, overlap, separators[1:], currentPosition+overlap)
 				chunks = append(chunks, subChunks...)
 				currentPosition = subChunks[len(subChunks)-1].Position + len(subChunks[len(subChunks)-1].Content)
 			} else {
-				// 开始新块
+				// Start new chunk
 				currentChunk = partWithSep
 			}
 		} else {
-			// 添加到当前块
+			// Add to current chunk
 			currentChunk += partWithSep
 		}
 	}
 
-	// 添加最后一个块
+	// Add last chunk
 	if currentChunk != "" {
 		chunks = append(chunks, &DocumentChunk{
 			Content:  currentChunk,
@@ -261,7 +270,7 @@ func (c *DocumentChunker) splitRecursive(content string, size int, overlap int, 
 	return chunks
 }
 
-// chunkFixed 按固定大小分块
+// chunkFixed chunks text into fixed-size segments
 func (c *DocumentChunker) chunkFixed(content string, size int, overlap int) ([]*DocumentChunk, error) {
 	if content == "" {
 		return []*DocumentChunk{}, nil
@@ -280,7 +289,7 @@ func (c *DocumentChunker) chunkFixed(content string, size int, overlap int) ([]*
 			Position: i,
 		})
 
-		// 如果已经处理到末尾，跳出循环
+		// If already processed to end, break loop
 		if end == contentLength {
 			break
 		}
@@ -289,13 +298,13 @@ func (c *DocumentChunker) chunkFixed(content string, size int, overlap int) ([]*
 	return chunks, nil
 }
 
-// chunkBySentence 按句子分块
+// chunkBySentence chunks text by sentences
 func (c *DocumentChunker) chunkBySentence(content string, size int, overlap int) ([]*DocumentChunk, error) {
-	// 句子结束符正则表达式
+	// Sentence end regex
 	re := regexp.MustCompile(`[.!?。！？]+\s*`)
 	sentences := re.Split(content, -1)
 
-	// 根据句子构建块
+	// Build chunks based on sentences
 	chunks := []*DocumentChunk{}
 	currentChunk := ""
 	currentPosition := 0
@@ -305,26 +314,26 @@ func (c *DocumentChunker) chunkBySentence(content string, size int, overlap int)
 			continue
 		}
 
-		// 添加句子结束符
+		// Add sentence end
 		sentenceWithEnd := sentence + ". "
 
-		// 如果当前块加上新句子超过大小，开始新块
+		// If current chunk plus new sentence exceeds size, start new chunk
 		if len(currentChunk)+len(sentenceWithEnd) > size && currentChunk != "" {
 			chunks = append(chunks, &DocumentChunk{
 				Content:  currentChunk,
 				Position: currentPosition,
 			})
 
-			// 考虑重叠，计算新块的起始位置
+			// Consider overlap, calculate new chunk start position
 			if overlap > 0 && len(currentChunk) > overlap {
-				// 找到重叠处的句子开始
+				// Find sentence start at overlap
 				currentPosition += len(currentChunk) - overlap
 				overlapText := currentChunk[len(currentChunk)-overlap:]
 
-				// 如果重叠处不是句子开始，寻找最接近的句子开始
+				// If overlap is not sentence start, find closest sentence start
 				sentenceStart := re.Split(overlapText, -1)
 				if len(sentenceStart) > 1 {
-					// 使用最后一个完整的句子
+					// Use last complete sentence
 					currentPosition += len(overlapText) - len(sentenceStart[len(sentenceStart)-1])
 					currentChunk = sentenceStart[len(sentenceStart)-1]
 				} else {
@@ -336,11 +345,11 @@ func (c *DocumentChunker) chunkBySentence(content string, size int, overlap int)
 			}
 		}
 
-		// 添加到当前块
+		// Add to current chunk
 		currentChunk += sentenceWithEnd
 	}
 
-	// 添加最后一个块
+	// Add last chunk
 	if currentChunk != "" {
 		chunks = append(chunks, &DocumentChunk{
 			Content:  currentChunk,
@@ -351,12 +360,12 @@ func (c *DocumentChunker) chunkBySentence(content string, size int, overlap int)
 	return chunks, nil
 }
 
-// chunkByParagraph 按段落分块
+// chunkByParagraph chunks text by paragraphs
 func (c *DocumentChunker) chunkByParagraph(content string, size int, overlap int) ([]*DocumentChunk, error) {
-	// 段落分隔符
+	// Paragraph separator
 	paragraphs := strings.Split(content, "\n\n")
 
-	// 根据段落构建块
+	// Build chunks based on paragraphs
 	chunks := []*DocumentChunk{}
 	currentChunk := ""
 	currentPosition := 0
@@ -366,26 +375,26 @@ func (c *DocumentChunker) chunkByParagraph(content string, size int, overlap int
 			continue
 		}
 
-		// 添加段落分隔符
+		// Add paragraph separator
 		paragraphWithEnd := paragraph + "\n\n"
 
-		// 如果当前块加上新段落超过大小，开始新块
+		// If current chunk plus new paragraph exceeds size, start new chunk
 		if len(currentChunk)+len(paragraphWithEnd) > size && currentChunk != "" {
 			chunks = append(chunks, &DocumentChunk{
 				Content:  currentChunk,
 				Position: currentPosition,
 			})
 
-			// 考虑重叠
+			// Consider overlap
 			if overlap > 0 && len(currentChunk) > overlap {
 				currentPosition += len(currentChunk) - overlap
 
-				// 找到重叠处的段落开始
+				// Find paragraph start at overlap
 				overlapText := currentChunk[len(currentChunk)-overlap:]
 				paragraphStart := strings.Split(overlapText, "\n\n")
 
 				if len(paragraphStart) > 1 {
-					// 使用最后一个完整的段落
+					// Use last complete paragraph
 					currentPosition += len(overlapText) - len(paragraphStart[len(paragraphStart)-1])
 					currentChunk = paragraphStart[len(paragraphStart)-1]
 				} else {
@@ -397,9 +406,9 @@ func (c *DocumentChunker) chunkByParagraph(content string, size int, overlap int
 			}
 		}
 
-		// 大段落可能需要进一步拆分
+		// Large paragraph may need further splitting
 		if len(paragraphWithEnd) > size {
-			// 如果当前块不为空，先添加
+			// If current chunk is not empty, add first
 			if currentChunk != "" {
 				chunks = append(chunks, &DocumentChunk{
 					Content:  currentChunk,
@@ -409,7 +418,7 @@ func (c *DocumentChunker) chunkByParagraph(content string, size int, overlap int
 				currentChunk = ""
 			}
 
-			// 按固定大小分块处理大段落
+			// Process large paragraph by fixed-size chunks
 			innerChunks, err := c.chunkFixed(paragraphWithEnd, size, overlap)
 			if err != nil {
 				return nil, err
@@ -420,18 +429,18 @@ func (c *DocumentChunker) chunkByParagraph(content string, size int, overlap int
 			}
 			chunks = append(chunks, innerChunks...)
 
-			// 更新位置
+			// Update position
 			if len(innerChunks) > 0 {
 				lastChunk := innerChunks[len(innerChunks)-1]
 				currentPosition = lastChunk.Position + len(lastChunk.Content)
 			}
 		} else {
-			// 正常添加到当前块
+			// Normal add to current chunk
 			currentChunk += paragraphWithEnd
 		}
 	}
 
-	// 添加最后一个块
+	// Add last chunk
 	if currentChunk != "" {
 		chunks = append(chunks, &DocumentChunk{
 			Content:  currentChunk,

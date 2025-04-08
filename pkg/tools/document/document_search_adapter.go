@@ -6,8 +6,21 @@ import (
 	"fmt"
 
 	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/search"
+	"github.com/yourusername/gostra/pkg/tools/common"
 )
+
+// VectorSearchResult 向量搜索结果
+type VectorSearchResult struct {
+	common.SearchResult
+}
+
+// VectorSearchInterface 定义向量搜索工具的接口
+type VectorSearchInterface interface {
+	Execute(params map[string]interface{}, options *tools.ExecuteOptions) (interface{}, error)
+	GetID() string
+	GetDescription() string
+	GetInputSchema() tools.Schema
+}
 
 // DocumentSearchAdapter 是一个接口，定义了文档搜索所需的方法
 type DocumentSearchAdapter interface {
@@ -56,7 +69,7 @@ type SearchResult struct {
 // 连接PostgreSQL向量存储与文档搜索功能
 type DocumentSearchAdapterImpl struct {
 	// 向量搜索工具
-	VectorTool *search.VectorSearchTool
+	VectorTool VectorSearchInterface
 	// 文档分块工具
 	Chunker *DocumentChunker
 	// 块大小
@@ -64,7 +77,7 @@ type DocumentSearchAdapterImpl struct {
 	// 块重叠
 	ChunkOverlap int
 	// 分块策略
-	ChunkStrategy ChunkStrategy
+	ChunkStrategy common.ChunkStrategy
 	// 存储块的函数
 	StoreChunkFunc func(ctx context.Context, chunks []*DocumentChunk) error
 	// 工具ID
@@ -76,7 +89,7 @@ type DocumentSearchAdapterImpl struct {
 }
 
 // NewDocumentSearchAdapter 创建一个新的文档搜索适配器
-func NewDocumentSearchAdapter(vectorTool *search.VectorSearchTool, chunker *DocumentChunker, storeFunc func(ctx context.Context, chunks []*DocumentChunk) error) *DocumentSearchAdapterImpl {
+func NewDocumentSearchAdapter(vectorTool VectorSearchInterface, chunker *DocumentChunker, storeFunc func(ctx context.Context, chunks []*DocumentChunk) error) *DocumentSearchAdapterImpl {
 	// 创建输入模式
 	schema := tools.NewSimpleSchema(tools.TypeObject, "文档搜索参数")
 
@@ -109,7 +122,7 @@ func NewDocumentSearchAdapter(vectorTool *search.VectorSearchTool, chunker *Docu
 		Chunker:        chunker,
 		ChunkSize:      1000, // 默认大小
 		ChunkOverlap:   100,  // 默认重叠
-		ChunkStrategy:  StrategyRecursive,
+		ChunkStrategy:  common.ChunkStrategyRecursive,
 		StoreChunkFunc: storeFunc,
 		ID:             "document_search",
 		Description:    "对文档内容进行语义搜索，返回相关文档块",

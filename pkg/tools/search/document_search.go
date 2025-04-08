@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/yourusername/gostra/pkg/tools/common"
 	"github.com/yourusername/gostra/pkg/tools/document"
 )
 
@@ -152,9 +153,16 @@ func (t *DocumentSearchTool) AddDocument(content string, documentID string, meta
 
 	// 添加到索引
 	for i, chunk := range chunks {
-		id := fmt.Sprintf("%s-%d", chunk.DocumentID, i)
-		if err := t.options.VectorSearchTool.AddItem(id, chunk, embeddings[i], chunk.Metadata); err != nil {
-			return err
+		id := fmt.Sprintf("%s-%d", documentID, i)
+		// 转换为common.DocumentChunk
+		commonChunk := &common.DocumentChunk{
+			Content:    chunk.Content,
+			DocumentID: documentID,
+			ChunkIndex: i,
+			Metadata:   chunk.Metadata,
+		}
+		if err := t.options.VectorSearchTool.AddItem(id, commonChunk, embeddings[i], chunk.Metadata); err != nil {
+			return fmt.Errorf("添加向量失败: %w", err)
 		}
 	}
 

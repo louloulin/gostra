@@ -1,16 +1,16 @@
 package search
 
 import (
-	"github.com/yourusername/gostra/pkg/tools/document"
+	"github.com/yourusername/gostra/pkg/tools/common"
 )
 
 // GraphNode 图节点
 type GraphNode struct {
-	ID       string                  `json:"id"`
-	Content  string                  `json:"content"`
-	Score    float32                 `json:"score"`
-	Chunk    *document.DocumentChunk `json:"chunk,omitempty"`
-	Metadata map[string]interface{}  `json:"metadata,omitempty"`
+	ID       string                 `json:"id"`
+	Content  string                 `json:"content"`
+	Score    float32                `json:"score"`
+	Chunk    *common.DocumentChunk  `json:"chunk,omitempty"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // GraphEdge 图边

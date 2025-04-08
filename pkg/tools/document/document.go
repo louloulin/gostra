@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/yourusername/gostra/pkg/tools/common"
 )
 
 // ProcessedDocument represents a processed document
@@ -26,9 +28,9 @@ type Chunk struct {
 
 // ChunkOptions defines options for document chunking
 type ChunkOptions struct {
-	Strategy string `json:"strategy"` // recursive, fixed, sentence, etc.
-	Size     int    `json:"size"`     // chunk size in tokens/chars
-	Overlap  int    `json:"overlap"`  // overlap between chunks
+	Strategy common.ChunkStrategy `json:"strategy"` // recursive, fixed, sentence, etc.
+	Size     int                  `json:"size"`     // chunk size in tokens/chars
+	Overlap  int                  `json:"overlap"`  // overlap between chunks
 }
 
 // DocumentProcessor handles document processing operations

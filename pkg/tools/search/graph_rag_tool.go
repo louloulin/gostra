@@ -257,7 +257,7 @@ func (t *GraphRAGTool) calculatePageRank(graph *KnowledgeGraph) map[string]float
 
 		// 更新得分
 		scoreSum := 0.0
-		for id, score := range newScores {
+		for _, score := range newScores {
 			scoreSum += score
 		}
 

@@ -7,7 +7,7 @@ import (
 	"sort"
 
 	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/document"
+	"github.com/yourusername/gostra/pkg/tools/common"
 )
 
 // EmbeddingProvider 嵌入向量提供者接口
@@ -36,7 +36,7 @@ type SearchFilters map[string]interface{}
 // VectorSearchResult 向量搜索结果
 type VectorSearchResult struct {
 	// 文档块
-	Chunk *document.DocumentChunk `json:"chunk"`
+	Chunk *common.DocumentChunk `json:"chunk"`
 	// 相似度得分
 	Score float32 `json:"score"`
 	// 额外元数据
@@ -63,9 +63,9 @@ type VectorSearchTool struct {
 	id      string
 	desc    string
 	schema  tools.Schema
-	vectors map[string][]float32               // 向量存储，键为ID
-	chunks  map[string]*document.DocumentChunk // 对应的文档块
-	meta    map[string]map[string]interface{}  // 元数据
+	vectors map[string][]float32              // 向量存储，键为ID
+	chunks  map[string]*common.DocumentChunk  // 对应的文档块
+	meta    map[string]map[string]interface{} // 元数据
 }
 
 // NewVectorSearchTool 创建新的向量搜索工具
@@ -102,7 +102,7 @@ func NewVectorSearchTool(options VectorSearchOptions) *VectorSearchTool {
 		desc:    "基于语义相似度搜索文档",
 		schema:  schema,
 		vectors: make(map[string][]float32),
-		chunks:  make(map[string]*document.DocumentChunk),
+		chunks:  make(map[string]*common.DocumentChunk),
 		meta:    make(map[string]map[string]interface{}),
 	}
 }
@@ -156,7 +156,7 @@ func (t *VectorSearchTool) Execute(params map[string]interface{}, options *tools
 }
 
 // AddItem 添加一个向量项
-func (t *VectorSearchTool) AddItem(id string, chunk *document.DocumentChunk, vector []float32, metadata map[string]interface{}) error {
+func (t *VectorSearchTool) AddItem(id string, chunk *common.DocumentChunk, vector []float32, metadata map[string]interface{}) error {
 	if len(vector) != t.options.Dimension {
 		return fmt.Errorf("向量维度不匹配，期望 %d，实际 %d", t.options.Dimension, len(vector))
 	}
@@ -174,7 +174,7 @@ func (t *VectorSearchTool) AddItem(id string, chunk *document.DocumentChunk, vec
 }
 
 // AddItems 批量添加向量项
-func (t *VectorSearchTool) AddItems(chunks []*document.DocumentChunk, metadata []map[string]interface{}) error {
+func (t *VectorSearchTool) AddItems(chunks []*common.DocumentChunk, metadata []map[string]interface{}) error {
 	if t.options.EmbeddingProvider == nil {
 		return errors.New("未设置嵌入向量提供者")
 	}
@@ -323,7 +323,7 @@ func (t *VectorSearchTool) DeleteItem(id string) bool {
 // Clear 清空所有向量
 func (t *VectorSearchTool) Clear() {
 	t.vectors = make(map[string][]float32)
-	t.chunks = make(map[string]*document.DocumentChunk)
+	t.chunks = make(map[string]*common.DocumentChunk)
 	t.meta = make(map[string]map[string]interface{})
 }
 

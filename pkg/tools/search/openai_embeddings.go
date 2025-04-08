@@ -240,7 +240,7 @@ func (p *OpenAIEmbeddingProvider) GetEmbeddings(texts []string) ([][]float32, er
 
 	// 提取嵌入向量
 	embeddings := make([][]float32, len(embeddingResp.Data))
-	for i, data := range embeddingResp.Data {
+	for _, data := range embeddingResp.Data {
 		embeddings[data.Index] = data.Embedding
 	}
 
