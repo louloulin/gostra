@@ -622,46 +622,87 @@ func (a *Agent) Stream(messages []Message, options *StreamOptions) (*StreamRespo
 		}
 	}
 
-	// 创建通道
-	textChan := make(chan string)
-	msgChan := make(chan Message)
-	finishChan := make(chan FinishInfo)
-	objectChan := make(chan interface{})
+	// 将Agent消息转换为模型消息
+	modelMessages := make([]models.Message, len(messages))
+	for i, msg := range messages {
+		modelMessages[i] = models.Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+			Name:    msg.Type, // 使用Type作为Name字段
+		}
+	}
 
-	// 异步处理流式响应
+	// 创建模型选项
+	modelOptions := &models.GenerateOptions{
+		Temperature: options.Temperature,
+		MaxTokens:   a.MaxTokens,
+	}
+
+	// 创建通道
+	textChan := make(chan string, 100)
+	msgChan := make(chan Message, 5)
+	finishChan := make(chan FinishInfo, 1)
+	objectChan := make(chan interface{}, 5)
+
+	// 启动新的goroutine处理流式响应
 	go func() {
 		defer close(textChan)
 		defer close(msgChan)
 		defer close(finishChan)
 		defer close(objectChan)
 
-		// 模拟流式响应
-		responseText := fmt.Sprintf("Response to: %s", messages[len(messages)-1].Content)
+		// 设置状态为运行中
+		a.StateManager.SetRunning("", "")
 
-		// 分块发送
-		for _, word := range []string{"Response ", "to: ", messages[len(messages)-1].Content} {
+		// 调用模型提供者的流式API
+		stream, err := a.ModelProvider.Stream(options.AbortSignal, modelMessages, modelOptions)
+		if err != nil {
+			// 发送错误信息
+			a.StateManager.SetError(fmt.Sprintf("streaming error: %v", err))
+			return
+		}
+
+		// 收集完整响应
+		fullResponse := strings.Builder{}
+
+		// 处理流式响应
+		for {
 			select {
 			case <-options.AbortSignal.Done():
+				a.StateManager.SetIdle()
 				return
-			case textChan <- word:
-				// 发送成功
+			case chunk, ok := <-stream:
+				if !ok {
+					// 流已关闭，发送完整消息和完成信息
+					responseText := fullResponse.String()
+
+					msgChan <- Message{
+						ID:        uuid.New().String(),
+						Role:      "assistant",
+						Content:   responseText,
+						CreatedAt: time.Now().Unix(),
+					}
+
+					finishChan <- FinishInfo{
+						FinishReason: "stop",
+						Usage: Usage{
+							PromptTokens:     100, // 实际应用中应从模型获取
+							CompletionTokens: 50,  // 实际应用中应从模型获取
+							TotalTokens:      150, // 实际应用中应从模型获取
+						},
+					}
+
+					// 设置状态为空闲
+					a.StateManager.SetIdle()
+					return
+				}
+
+				// 发送文本块
+				textChan <- chunk
+
+				// 追加到完整响应
+				fullResponse.WriteString(chunk)
 			}
-		}
-
-		// 发送消息
-		msgChan <- Message{
-			Role:    "assistant",
-			Content: responseText,
-		}
-
-		// 发送完成信息
-		finishChan <- FinishInfo{
-			FinishReason: "stop",
-			Usage: Usage{
-				PromptTokens:     100,
-				CompletionTokens: 50,
-				TotalTokens:      150,
-			},
 		}
 	}()
 

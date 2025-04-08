@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/yourusername/gostra/pkg"
+	"github.com/yourusername/gostra/pkg/agent"
 )
 
 // Server 表示API服务器
@@ -96,6 +97,7 @@ func (s *Server) setupRoutes() {
 	agents.HandleFunc("", s.listAgentsHandler).Methods("GET")
 	agents.HandleFunc("/{name}", s.getAgentHandler).Methods("GET")
 	agents.HandleFunc("/{name}/run", s.runAgentHandler).Methods("POST")
+	agents.HandleFunc("/{name}/stream", s.streamAgentHandler).Methods("POST")
 
 	// Thread相关API
 	threads := api.PathPrefix("/threads").Subrouter()
@@ -246,4 +248,122 @@ func (s *Server) addMessageHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	// TODO: 实现删除线程消息
 	sendError(w, http.StatusNotImplemented, "Not implemented yet")
+}
+
+// 流式请求结构
+type StreamRequest struct {
+	Messages []agent.Message      `json:"messages"`
+	Options  *agent.StreamOptions `json:"options,omitempty"`
+}
+
+// streamAgentHandler 处理Agent的流式生成请求
+func (s *Server) streamAgentHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	name := vars["name"]
+
+	// 获取Agent
+	agentInstance, err := s.gostra.GetAgent(name)
+	if err != nil {
+		sendError(w, http.StatusNotFound, "Agent not found: "+name)
+		return
+	}
+
+	// 解析请求体
+	var req StreamRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	// 设置SSE响应头
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	// 创建可取消的上下文
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// 检测客户端断开连接
+	go func() {
+		<-ctx.Done()
+		log.Println("Client disconnected from SSE stream")
+	}()
+
+	// 如果没有设置选项，创建默认选项
+	if req.Options == nil {
+		req.Options = &agent.StreamOptions{
+			MaxSteps:    10,
+			Temperature: 0.7,
+		}
+	}
+
+	// 设置上下文
+	req.Options.AbortSignal = ctx
+
+	// 调用Agent的流式生成方法
+	streamResp, err := agentInstance.Stream(req.Messages, req.Options)
+	if err != nil {
+		// 发送错误事件
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		w.(http.Flusher).Flush()
+		return
+	}
+
+	// 读取文本流
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case text, ok := <-streamResp.TextStream:
+				if !ok {
+					// 文本流关闭
+					return
+				}
+				// 发送文本事件
+				fmt.Fprintf(w, "event: text\ndata: %s\n\n", text)
+				w.(http.Flusher).Flush()
+			}
+		}
+	}()
+
+	// 读取消息流
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-streamResp.MessageChan:
+				if !ok {
+					// 消息流关闭
+					return
+				}
+				// 序列化消息并发送
+				msgJSON, _ := json.Marshal(msg)
+				fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(msgJSON))
+				w.(http.Flusher).Flush()
+			}
+		}
+	}()
+
+	// 读取完成信息
+	select {
+	case <-ctx.Done():
+		return
+	case finish, ok := <-streamResp.FinishChan:
+		if !ok {
+			// 流已关闭
+			return
+		}
+		// 序列化完成信息并发送
+		finishJSON, _ := json.Marshal(finish)
+		fmt.Fprintf(w, "event: finish\ndata: %s\n\n", string(finishJSON))
+		w.(http.Flusher).Flush()
+	}
+
+	// 发送关闭事件
+	fmt.Fprintf(w, "event: close\ndata: stream closed\n\n")
+	w.(http.Flusher).Flush()
 }

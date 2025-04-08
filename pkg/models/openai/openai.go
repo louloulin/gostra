@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"bufio"
+
 	"github.com/yourusername/gostra/pkg/models"
 )
 
@@ -221,13 +223,14 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []models.Message, 
 	}
 
 	// 创建输出通道
-	outputChan := make(chan string)
+	outputChan := make(chan string, 100)
 
 	// 启动goroutine处理流式响应
 	go func() {
 		defer resp.Body.Close()
 		defer close(outputChan)
 
+		// 使用标准库的bufio.Reader
 		reader := bufio.NewReader(resp.Body)
 		for {
 			// 检查上下文是否已取消
@@ -235,50 +238,71 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []models.Message, 
 			case <-ctx.Done():
 				return
 			default:
-				// 读取一行
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					if err == io.EOF {
-						return
-					}
-					// 忽略其他错误，继续读取
-					continue
-				}
+				// 继续处理
+			}
 
-				// 去除前缀 "data: "
-				line = strings.TrimSpace(line)
-				if !strings.HasPrefix(line, "data: ") {
-					continue
-				}
-				line = line[6:]
-
-				// 处理心跳消息
-				if line == "[DONE]" {
+			// 读取一行
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
 					return
 				}
+				// 忽略其他错误，继续读取
+				continue
+			}
 
-				// 解析JSON消息
-				var response struct {
-					Choices []struct {
-						Delta struct {
-							Content string `json:"content"`
-						} `json:"delta"`
-					} `json:"choices"`
-				}
+			// 去除空白
+			line = strings.TrimSpace(line)
 
-				if err := json.Unmarshal([]byte(line), &response); err != nil {
-					// 忽略解析错误，继续读取
-					continue
-				}
+			// 跳过空行
+			if line == "" {
+				continue
+			}
 
-				// 发送内容到通道
-				if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
+			// 处理数据结束信号
+			if line == "data: [DONE]" {
+				return
+			}
+
+			// 检查并去除SSE前缀
+			if strings.HasPrefix(line, "data: ") {
+				line = strings.TrimPrefix(line, "data: ")
+			} else {
+				// 不是数据行，跳过
+				continue
+			}
+
+			// 解析JSON
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+					FinishReason *string `json:"finish_reason"`
+				} `json:"choices"`
+			}
+
+			if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+				// 解析错误，跳过此行
+				continue
+			}
+
+			// 检查是否有内容
+			if len(chunk.Choices) > 0 {
+				content := chunk.Choices[0].Delta.Content
+				if content != "" {
+					// 发送内容到通道
 					select {
 					case <-ctx.Done():
 						return
-					case outputChan <- response.Choices[0].Delta.Content:
-						// 内容已发送
+					case outputChan <- content:
+						// 成功发送
 					}
+				}
+
+				// 检查是否完成
+				if chunk.Choices[0].FinishReason != nil {
+					return
 				}
 			}
 		}
@@ -310,54 +334,4 @@ func convertMessagesToOpenAIFormat(messages []models.Message) []map[string]strin
 		openaiMessages[i] = openaiMsg
 	}
 	return openaiMessages
-}
-
-// bufio 包在这里实现
-type bufio struct {
-	reader io.Reader
-	buffer []byte
-	pos    int
-	end    int
-}
-
-func NewReader(rd io.Reader) *bufio {
-	return &bufio{
-		reader: rd,
-		buffer: make([]byte, 4096),
-	}
-}
-
-func (b *bufio) ReadString(delim byte) (string, error) {
-	var result []byte
-	for {
-		// 如果缓冲区中有数据
-		if b.pos < b.end {
-			// 查找分隔符
-			i := b.pos
-			for ; i < b.end; i++ {
-				if b.buffer[i] == delim {
-					result = append(result, b.buffer[b.pos:i+1]...)
-					b.pos = i + 1
-					return string(result), nil
-				}
-			}
-			// 没有找到分隔符，添加当前缓冲区中剩余的数据
-			result = append(result, b.buffer[b.pos:b.end]...)
-			b.pos = b.end
-		}
-
-		// 重新填充缓冲区
-		b.pos = 0
-		n, err := b.reader.Read(b.buffer)
-		b.end = n
-		if err != nil {
-			if err == io.EOF && len(result) > 0 {
-				return string(result), nil
-			}
-			return string(result), err
-		}
-		if n == 0 {
-			return string(result), io.EOF
-		}
-	}
 }
