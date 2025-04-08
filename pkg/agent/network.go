@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -9,9 +10,19 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/google/uuid"
+	"github.com/yourusername/gostra/pkg/errors"
+	"github.com/yourusername/gostra/pkg/models"
 )
 
-// AgentNetwork 定义了agent网络的结构
+// NetworkMessage represents a message in the agent network
+type NetworkMessage struct {
+	From    string      `json:"from"`
+	To      string      `json:"to"`
+	Content string      `json:"content"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// AgentNetwork manages a network of collaborative agents
 type AgentNetwork struct {
 	ID          string
 	Name        string
@@ -23,6 +34,21 @@ type AgentNetwork struct {
 	actorSystem *actor.ActorSystem
 	rootContext *actor.RootContext
 	mu          sync.RWMutex
+
+	// Actor system reference
+	system *actor.ActorSystem
+
+	// Map of agent names to their PIDs
+	agents map[string]*actor.PID
+
+	// Router agent for dynamic routing
+	router *RouterAgent
+
+	// Supervisor for error handling
+	supervisor *errors.Supervisor
+
+	// Model provider for LLM operations
+	model models.ModelProvider
 }
 
 // AgentNetworkOptions 创建网络的选项
@@ -35,7 +61,7 @@ type AgentNetworkOptions struct {
 }
 
 // NewAgentNetwork 创建一个新的Agent网络
-func NewAgentNetwork(opts *AgentNetworkOptions) (*AgentNetwork, error) {
+func NewAgentNetwork(opts *AgentNetworkOptions, model models.ModelProvider) (*AgentNetwork, error) {
 	if opts == nil {
 		return nil, errors.New("options cannot be nil")
 	}
@@ -64,12 +90,26 @@ func NewAgentNetwork(opts *AgentNetworkOptions) (*AgentNetwork, error) {
 		agentActors: make(map[string]*actor.PID),
 		actorSystem: actorSystem,
 		rootContext: actor.NewRootContext(actorSystem, nil),
+		agents:      make(map[string]*actor.PID),
+		model:       model,
+		supervisor:  errors.NewSupervisor(actorSystem, nil),
 	}
 
 	// 添加初始Agent
 	for _, agentID := range opts.AgentIDs {
 		network.AgentIDs = append(network.AgentIDs, agentID)
 	}
+
+	// Create router agent
+	routerProps := actor.PropsFromProducer(func() actor.Actor {
+		return NewRouterAgent(network)
+	})
+	routerPID, err := actorSystem.Root.SpawnNamed(routerProps, "router")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create router agent: %w", err)
+	}
+
+	network.router = routerPID.Interface().(*RouterAgent)
 
 	return network, nil
 }
@@ -532,4 +572,110 @@ type NetworkStatusResponse struct {
 	AgentCount  int                 `json:"agent_count"`
 	Agents      []string            `json:"agents"`
 	Topology    map[string][]string `json:"topology"`
+}
+
+// RegisterAgent adds an agent to the network
+func (n *AgentNetwork) RegisterAgent(name string, agent Actor) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	props := actor.PropsFromProducer(func() actor.Actor {
+		return NewActorAgent(agent, n.model)
+	})
+
+	pid, err := n.system.Root.SpawnNamed(props, name)
+	if err != nil {
+		return err
+	}
+
+	n.agents[name] = pid
+	return nil
+}
+
+// Transmit sends a message through the network
+func (n *AgentNetwork) Transmit(ctx context.Context, msg *NetworkMessage) error {
+	n.mu.RLock()
+	targetPID, exists := n.agents[msg.To]
+	n.mu.RUnlock()
+
+	if !exists {
+		return errors.NewAgentError(
+			errors.ActorError,
+			errors.Error,
+			"Target agent not found",
+			nil,
+			true,
+		)
+	}
+
+	future := n.system.Root.RequestFuture(targetPID, msg, timeout)
+	result, err := future.Result()
+	if err != nil {
+		return n.supervisor.HandleFailure(ctx, targetPID, msg.To, err)
+	}
+
+	return result.(error)
+}
+
+// BroadcastMessage sends a message to multiple agents in parallel
+func (n *AgentNetwork) BroadcastMessage(ctx context.Context, msg *NetworkMessage, targets []string) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(targets))
+
+	for _, target := range targets {
+		wg.Add(1)
+		go func(target string) {
+			defer wg.Done()
+			msg.To = target
+			if err := n.Transmit(ctx, msg); err != nil {
+				errChan <- err
+			}
+		}(target)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Collect errors
+	var errs []error
+	for err := range errChan {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return errors.NewAgentError(
+			errors.SystemError,
+			errors.Error,
+			"Broadcast failed for some targets",
+			errs[0],
+			true,
+		)
+	}
+
+	return nil
+}
+
+// GetAgent retrieves an agent from the network
+func (n *AgentNetwork) GetAgent(name string) (Actor, bool) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	pid, exists := n.agents[name]
+	if !exists {
+		return nil, false
+	}
+
+	return pid.Interface().(Actor), true
+}
+
+// RemoveAgent removes an agent from the network
+func (n *AgentNetwork) RemoveAgent(name string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if pid, exists := n.agents[name]; exists {
+		n.supervisor.RemoveActor(pid)
+		pid.Stop()
+		delete(n.agents, name)
+	}
 }

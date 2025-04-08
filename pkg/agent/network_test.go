@@ -1,13 +1,37 @@
 package agent
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/stretchr/testify/assert"
 	"github.com/yourusername/gostra/pkg/memory"
+	"github.com/yourusername/gostra/pkg/models"
 )
+
+// MockAgent implements the Actor interface for testing
+type MockAgent struct {
+	received []*NetworkMessage
+}
+
+func (m *MockAgent) Receive(context actor.Context) {
+	switch msg := context.Message().(type) {
+	case *NetworkMessage:
+		m.received = append(m.received, msg)
+		context.Respond(nil)
+	}
+}
+
+// MockModel implements the ModelProvider interface for testing
+type MockModel struct{}
+
+func (m *MockModel) Generate(ctx context.Context, messages []models.Message, opts *models.GenerateOptions) (*models.Response, error) {
+	return &models.Response{
+		Text: "agent1",
+	}, nil
+}
 
 // mockModelProvider 模拟模型提供者
 type mockModelProvider struct{}
@@ -91,124 +115,136 @@ func (m *mockMemoryProvider) DeleteMessages(ctx interface{}, threadID string, me
 
 // TestAgentNetwork 测试Agent网络功能
 func TestAgentNetwork(t *testing.T) {
-	// 创建Actor系统
 	system := actor.NewActorSystem()
+	model := &MockModel{}
 
-	// 创建模拟的模型和内存提供者
-	modelProvider := &mockModelProvider{}
-	memoryProvider := newMockMemoryProvider()
-
-	// 创建两个Agent
-	agent1, err := NewAgent(&Options{
-		ID:             "agent1",
-		Name:           "Agent One",
-		SystemPrompt:   "You are Agent One",
-		ModelProvider:  modelProvider,
-		MemoryProvider: memoryProvider,
+	t.Run("Network Creation", func(t *testing.T) {
+		network := NewAgentNetwork(system, model)
+		assert.NotNil(t, network)
+		assert.NotNil(t, network.router)
+		assert.NotNil(t, network.supervisor)
 	})
-	assert.NoError(t, err)
 
-	agent2, err := NewAgent(&Options{
-		ID:             "agent2",
-		Name:           "Agent Two",
-		SystemPrompt:   "You are Agent Two",
-		ModelProvider:  modelProvider,
-		MemoryProvider: memoryProvider,
+	t.Run("Agent Registration", func(t *testing.T) {
+		network := NewAgentNetwork(system, model)
+		agent1 := &MockAgent{}
+
+		err := network.RegisterAgent("agent1", agent1)
+		assert.NoError(t, err)
+
+		retrievedAgent, exists := network.GetAgent("agent1")
+		assert.True(t, exists)
+		assert.NotNil(t, retrievedAgent)
 	})
-	assert.NoError(t, err)
 
-	// 创建Agent Actor
-	props1, err := NewActorAgent(&ActorAgentOptions{
-		ID:             agent1.ID,
-		Name:           agent1.Name,
-		SystemPrompt:   agent1.SystemPrompt,
-		ModelProvider:  modelProvider,
-		MemoryProvider: memoryProvider,
-		ActorSystem:    system,
+	t.Run("Message Transmission", func(t *testing.T) {
+		network := NewAgentNetwork(system, model)
+		agent1 := &MockAgent{}
+		agent2 := &MockAgent{}
+
+		network.RegisterAgent("agent1", agent1)
+		network.RegisterAgent("agent2", agent2)
+
+		msg := &NetworkMessage{
+			From:    "agent1",
+			To:      "agent2",
+			Content: "test message",
+		}
+
+		err := network.Transmit(context.Background(), msg)
+		assert.NoError(t, err)
+
+		// Allow time for message processing
+		time.Sleep(100 * time.Millisecond)
+
+		assert.Len(t, agent2.received, 1)
+		assert.Equal(t, msg.Content, agent2.received[0].Content)
 	})
-	assert.NoError(t, err)
 
-	props2, err := NewActorAgent(&ActorAgentOptions{
-		ID:             agent2.ID,
-		Name:           agent2.Name,
-		SystemPrompt:   agent2.SystemPrompt,
-		ModelProvider:  modelProvider,
-		MemoryProvider: memoryProvider,
-		ActorSystem:    system,
+	t.Run("Broadcast Message", func(t *testing.T) {
+		network := NewAgentNetwork(system, model)
+		agent1 := &MockAgent{}
+		agent2 := &MockAgent{}
+		agent3 := &MockAgent{}
+
+		network.RegisterAgent("agent1", agent1)
+		network.RegisterAgent("agent2", agent2)
+		network.RegisterAgent("agent3", agent3)
+
+		msg := &NetworkMessage{
+			From:    "agent1",
+			Content: "broadcast message",
+		}
+
+		targets := []string{"agent2", "agent3"}
+		err := network.BroadcastMessage(context.Background(), msg, targets)
+		assert.NoError(t, err)
+
+		// Allow time for message processing
+		time.Sleep(100 * time.Millisecond)
+
+		assert.Len(t, agent2.received, 1)
+		assert.Len(t, agent3.received, 1)
+		assert.Equal(t, msg.Content, agent2.received[0].Content)
+		assert.Equal(t, msg.Content, agent3.received[0].Content)
 	})
-	assert.NoError(t, err)
 
-	// 启动Agent Actor
-	rootContext := actor.NewRootContext(system, nil)
-	pid1, err := rootContext.SpawnNamed(props1, "agent-agent1")
-	assert.NoError(t, err)
+	t.Run("Agent Removal", func(t *testing.T) {
+		network := NewAgentNetwork(system, model)
+		agent1 := &MockAgent{}
 
-	pid2, err := rootContext.SpawnNamed(props2, "agent-agent2")
-	assert.NoError(t, err)
+		network.RegisterAgent("agent1", agent1)
+		network.RemoveAgent("agent1")
 
-	// 等待Actor启动
-	time.Sleep(100 * time.Millisecond)
-
-	// 创建自定义的ActorSystem包装
-	customSystem := &mockActorSystem{
-		system:    system,
-		rootCtx:   rootContext,
-		agentPIDs: make(map[string]*actor.PID),
-	}
-
-	// 注册Agent
-	customSystem.agentPIDs["agent1"] = pid1
-	customSystem.agentPIDs["agent2"] = pid2
-
-	// 创建网络
-	network, err := NewAgentNetwork(&AgentNetworkOptions{
-		ID:          "network1",
-		Name:        "Test Network",
-		Description: "Network for testing",
-		AgentIDs:    []string{"agent1", "agent2"},
-		ActorSystem: customSystem,
+		_, exists := network.GetAgent("agent1")
+		assert.False(t, exists)
 	})
-	assert.NoError(t, err)
 
-	// 启动网络
-	err = network.Start()
-	assert.NoError(t, err)
+	t.Run("Error Handling", func(t *testing.T) {
+		network := NewAgentNetwork(system, model)
 
-	// 连接两个Agent
-	err = network.ConnectAgents("agent1", "agent2")
-	assert.NoError(t, err)
+		msg := &NetworkMessage{
+			From:    "agent1",
+			To:      "nonexistent",
+			Content: "test message",
+		}
 
-	// 验证连接
-	connections, err := network.GetConnections("agent1")
-	assert.NoError(t, err)
-	assert.Contains(t, connections, "agent2")
+		err := network.Transmit(context.Background(), msg)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Target agent not found")
+	})
+}
 
-	// 发送消息
-	err = network.SendMessage("agent1", "agent2", "Hello from Agent 1")
-	assert.NoError(t, err)
+func TestRouterAgent(t *testing.T) {
+	system := actor.NewActorSystem()
+	model := &MockModel{}
+	network := NewAgentNetwork(system, model)
 
-	// 等待消息处理
-	time.Sleep(100 * time.Millisecond)
+	t.Run("Message Routing", func(t *testing.T) {
+		agent1 := &MockAgent{}
+		network.RegisterAgent("agent1", agent1)
 
-	// 断开连接
-	err = network.DisconnectAgents("agent1", "agent2")
-	assert.NoError(t, err)
+		msg := &NetworkMessage{
+			Content: "route this message",
+		}
 
-	// 验证连接已断开
-	connections, err = network.GetConnections("agent1")
-	assert.NoError(t, err)
-	assert.NotContains(t, connections, "agent2")
+		props := actor.PropsFromProducer(func() actor.Actor {
+			return NewRouterAgent(network)
+		})
 
-	// 停止网络
-	err = network.Stop()
-	assert.NoError(t, err)
+		routerPID := system.Root.Spawn(props)
+		future := system.Root.RequestFuture(routerPID, msg, 1*time.Second)
+		result, err := future.Result()
 
-	// 停止Agent
-	rootContext.Stop(pid1)
-	rootContext.Stop(pid2)
+		assert.NoError(t, err)
+		assert.Nil(t, result)
 
-	// 等待Actor停止
-	time.Sleep(100 * time.Millisecond)
+		// Allow time for message processing
+		time.Sleep(100 * time.Millisecond)
+
+		assert.Len(t, agent1.received, 1)
+		assert.Equal(t, msg.Content, agent1.received[0].Content)
+	})
 }
 
 // mockActorSystem 实现自定义ActorSystem接口
