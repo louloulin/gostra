@@ -13,10 +13,10 @@ import (
 
 // Gostra 是框架的主入口类
 type Gostra struct {
-	actorSystem *actor.ActorSystem
-	agents      map[string]*agent.Agent
-	tools       map[string]tools.Tool
-	models      map[string]models.ModelProvider
+	actorSystem   *actor.ActorSystem
+	agents        map[string]*agent.Agent
+	tools         map[string]tools.Tool
+	modelRegistry *models.ModelRegistry
 }
 
 // Config 是Gostra配置选项
@@ -32,10 +32,10 @@ func New(config *Config) *Gostra {
 	}
 
 	g := &Gostra{
-		actorSystem: actor.NewActorSystem(actorConfig),
-		agents:      make(map[string]*agent.Agent),
-		tools:       make(map[string]tools.Tool),
-		models:      make(map[string]models.ModelProvider),
+		actorSystem:   actor.NewActorSystem(actorConfig),
+		agents:        make(map[string]*agent.Agent),
+		tools:         make(map[string]tools.Tool),
+		modelRegistry: models.NewModelRegistry(),
 	}
 
 	return g
@@ -126,28 +126,72 @@ func (g *Gostra) GetTool(name string) (tools.Tool, error) {
 	return nil, errors.New("tool not found: " + name)
 }
 
-// RegisterModel 注册一个模型提供者
-func (g *Gostra) RegisterModel(name string, m models.ModelProvider) error {
-	if m == nil {
-		return errors.New("model provider cannot be nil")
+// RegisterTextModel 注册一个文本模型提供者
+func (g *Gostra) RegisterTextModel(name string, provider models.ModelProvider) error {
+	if err := g.modelRegistry.RegisterTextModel(name, provider); err != nil {
+		return err
 	}
 
-	if _, exists := g.models[name]; exists {
-		return errors.New("model provider already registered: " + name)
-	}
-
-	// 存储模型实例
-	g.models[name] = m
-
-	log.Printf("Model provider registered: %s", name)
-
+	log.Printf("Text model provider registered: %s", name)
 	return nil
 }
 
-// GetModel 获取已注册的模型提供者
-func (g *Gostra) GetModel(name string) (models.ModelProvider, error) {
-	if m, exists := g.models[name]; exists {
-		return m, nil
+// GetTextModel 获取已注册的文本模型提供者
+func (g *Gostra) GetTextModel(name string) (models.ModelProvider, error) {
+	return g.modelRegistry.GetTextModel(name)
+}
+
+// RegisterImageModel 注册一个图像模型提供者
+func (g *Gostra) RegisterImageModel(name string, provider models.ImageProvider) error {
+	if err := g.modelRegistry.RegisterImageModel(name, provider); err != nil {
+		return err
 	}
-	return nil, errors.New("model provider not found: " + name)
+
+	log.Printf("Image model provider registered: %s", name)
+	return nil
+}
+
+// GetImageModel 获取已注册的图像模型提供者
+func (g *Gostra) GetImageModel(name string) (models.ImageProvider, error) {
+	return g.modelRegistry.GetImageModel(name)
+}
+
+// RegisterVoiceModel 注册一个语音模型提供者
+func (g *Gostra) RegisterVoiceModel(name string, provider models.VoiceProvider) error {
+	if err := g.modelRegistry.RegisterVoiceModel(name, provider); err != nil {
+		return err
+	}
+
+	log.Printf("Voice model provider registered: %s", name)
+	return nil
+}
+
+// GetVoiceModel 获取已注册的语音模型提供者
+func (g *Gostra) GetVoiceModel(name string) (models.VoiceProvider, error) {
+	return g.modelRegistry.GetVoiceModel(name)
+}
+
+// ListTextModels 列出所有已注册的文本模型
+func (g *Gostra) ListTextModels() []string {
+	return g.modelRegistry.ListTextModels()
+}
+
+// ListImageModels 列出所有已注册的图像模型
+func (g *Gostra) ListImageModels() []string {
+	return g.modelRegistry.ListImageModels()
+}
+
+// ListVoiceModels 列出所有已注册的语音模型
+func (g *Gostra) ListVoiceModels() []string {
+	return g.modelRegistry.ListVoiceModels()
+}
+
+// RegisterModel 注册一个文本模型提供者（兼容旧的API）
+func (g *Gostra) RegisterModel(name string, m models.ModelProvider) error {
+	return g.RegisterTextModel(name, m)
+}
+
+// GetModel 获取已注册的文本模型提供者（兼容旧的API）
+func (g *Gostra) GetModel(name string) (models.ModelProvider, error) {
+	return g.GetTextModel(name)
 }
