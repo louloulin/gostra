@@ -8,6 +8,10 @@ import (
 	"github.com/asynkron/protoactor-go/actor"
 )
 
+// Resume is a message type for resuming an actor
+// This is used since actor.Resume is not defined in newer versions of protoactor-go
+type Resume struct{}
+
 // Supervisor manages error recovery for actors
 type Supervisor struct {
 	mu sync.RWMutex
@@ -141,7 +145,7 @@ func (s *Supervisor) restartActor(ctx context.Context, pid *actor.PID) error {
 // resumeActor resumes a failed actor
 func (s *Supervisor) resumeActor(ctx context.Context, pid *actor.PID) error {
 	// Use actor system to send resume message
-	s.system.Root.Send(pid, &actor.Resume{})
+	s.system.Root.Send(pid, &Resume{})
 	return nil
 }
 

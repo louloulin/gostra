@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// Message represents a message in the system
-type Message struct {
+// BaseMessage represents a message in the system
+type BaseMessage struct {
 	Role     string                 `json:"role"`
 	Content  string                 `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// Response represents a model's response
+// Response represents a model's response from the original API
 type Response struct {
 	Text       string                 `json:"text"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
@@ -27,8 +27,8 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// GenerateOptions contains options for text generation
-type GenerateOptions struct {
+// BaseGenerateOptions contains options for text generation
+type BaseGenerateOptions struct {
 	Temperature      float64    `json:"temperature"`
 	MaxTokens        int        `json:"max_tokens"`
 	StopSequences    []string   `json:"stop_sequences,omitempty"`
@@ -38,22 +38,22 @@ type GenerateOptions struct {
 	Functions        []Function `json:"functions,omitempty"`
 }
 
-// Function represents a callable function definition
+// Function represents a callable function definition (legacy format)
 type Function struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Parameters  interface{} `json:"parameters"`
 }
 
-// ModelProvider defines the interface for model providers
-type ModelProvider interface {
+// TextGenerationProvider defines the interface for model providers that generate text
+type TextGenerationProvider interface {
 	// Generate generates text based on the provided messages
-	Generate(ctx context.Context, messages []Message, opts *GenerateOptions) (*Response, error)
+	Generate(ctx context.Context, messages []BaseMessage, opts *BaseGenerateOptions) (*Response, error)
 }
 
-// DefaultGenerateOptions returns default generation options
-func DefaultGenerateOptions() *GenerateOptions {
-	return &GenerateOptions{
+// CreateDefaultGenerateOptions returns default generation options
+func CreateDefaultGenerateOptions() *BaseGenerateOptions {
+	return &BaseGenerateOptions{
 		Temperature:      0.7,
 		MaxTokens:        2000,
 		TopP:             1.0,

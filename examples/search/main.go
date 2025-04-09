@@ -8,10 +8,48 @@ import (
 
 	"github.com/yourusername/gostra/pkg/memory"
 	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/common"
 	"github.com/yourusername/gostra/pkg/tools/document"
 	"github.com/yourusername/gostra/pkg/tools/search"
 )
+
+// EmbeddingAdapter 适配内存包的OpenAIEmbeddingProvider到search包的EmbeddingProvider接口
+type EmbeddingAdapter struct {
+	provider *memory.OpenAIEmbeddingProvider
+	ctx      context.Context
+}
+
+// NewEmbeddingAdapter 创建新的嵌入适配器
+func NewEmbeddingAdapter(provider *memory.OpenAIEmbeddingProvider, ctx context.Context) *EmbeddingAdapter {
+	return &EmbeddingAdapter{
+		provider: provider,
+		ctx:      ctx,
+	}
+}
+
+// GetEmbedding 适配单个嵌入方法
+func (a *EmbeddingAdapter) GetEmbedding(text string) ([]float32, error) {
+	embedding, err := a.provider.GetEmbedding(a.ctx, text)
+	if err != nil {
+		return nil, err
+	}
+	// memory.Embedding 本身就是 []float32 类型，直接返回
+	return embedding, nil
+}
+
+// GetEmbeddings 适配批量嵌入方法
+func (a *EmbeddingAdapter) GetEmbeddings(texts []string) ([][]float32, error) {
+	embeddings, err := a.provider.GetEmbeddings(a.ctx, texts)
+	if err != nil {
+		return nil, err
+	}
+
+	// 将[]memory.Embedding转换为[][]float32（实际上类型相同，只是类型别名）
+	result := make([][]float32, len(embeddings))
+	for i, emb := range embeddings {
+		result[i] = emb
+	}
+	return result, nil
+}
 
 func main() {
 	ctx := context.Background()
@@ -22,7 +60,7 @@ func main() {
 		log.Fatal("未设置OPENAI_API_KEY环境变量")
 	}
 
-	embeddingProvider, err := memory.NewOpenAIEmbeddingProvider(&memory.OpenAIEmbeddingOptions{
+	memoryProvider, err := memory.NewOpenAIEmbeddingProvider(&memory.OpenAIEmbeddingOptions{
 		APIKey:  openAIAPIKey,
 		Model:   "text-embedding-3-small",
 		BaseURL: "https://api.openai.com/v1",
@@ -31,8 +69,8 @@ func main() {
 		log.Fatalf("创建嵌入提供者失败: %v", err)
 	}
 
-	// 创建内存向量存储
-	vectorStore := memory.NewInMemoryVectorStore(embeddingProvider)
+	// 创建嵌入适配器
+	embeddingProvider := NewEmbeddingAdapter(memoryProvider, ctx)
 
 	// 创建文档分块工具
 	chunker := document.NewDocumentChunker(document.DocumentChunkerOptions{
@@ -57,7 +95,7 @@ func main() {
 		EmbeddingProvider: embeddingProvider,
 		ChunkSize:         500,
 		ChunkOverlap:      50,
-		ChunkStrategy:     common.ChunkStrategyFixed,
+		ChunkStrategy:     document.StrategyFixed, // 使用document包的StrategyFixed而非common包的
 	})
 
 	// 示例文档内容
@@ -128,6 +166,7 @@ func main() {
 
 	// 清除文档
 	fmt.Println("\n清除所有文档...")
-	docSearchTool.Clear()
+	// 使用ClearDocuments代替Clear方法
+	docSearchTool.ClearDocuments()
 	fmt.Println("文档已清除")
 }

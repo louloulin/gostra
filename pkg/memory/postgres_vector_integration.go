@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/yourusername/gostra/pkg/tools/common"
 	"github.com/yourusername/gostra/pkg/tools/document"
 	"github.com/yourusername/gostra/pkg/tools/search"
 )
@@ -116,19 +117,28 @@ func (p *PostgresVectorIntegration) ExecuteWithPostgres(params map[string]interf
 	searchResults := make([]*search.VectorSearchResult, len(results))
 	for i, result := range results {
 		// 解析元数据中的chunks
-		var chunk *document.DocumentChunk
+		var docChunk *document.DocumentChunk
 		if chunkData, ok := result.Vector.Metadata["chunk"]; ok {
 			chunkJSON, err := json.Marshal(chunkData)
 			if err == nil {
-				var docChunk document.DocumentChunk
-				if err := json.Unmarshal(chunkJSON, &docChunk); err == nil {
-					chunk = &docChunk
+				var tempChunk document.DocumentChunk
+				if err := json.Unmarshal(chunkJSON, &tempChunk); err == nil {
+					docChunk = &tempChunk
 				}
 			}
 		}
 
-		// 如果没有chunk数据或解析失败，创建一个基础chunk
-		if chunk == nil {
+		// 转换为common.DocumentChunk
+		var commonChunk *common.DocumentChunk
+		if docChunk != nil {
+			commonChunk = &common.DocumentChunk{
+				Content:    docChunk.Content,
+				DocumentID: docChunk.DocumentID,
+				ChunkIndex: docChunk.ChunkIndex,
+				Metadata:   docChunk.Metadata,
+			}
+		} else {
+			// 如果没有chunk数据或解析失败，创建一个基础chunk
 			content := ""
 			if textValue, ok := result.Vector.Metadata["text"]; ok {
 				if text, ok := textValue.(string); ok {
@@ -136,15 +146,16 @@ func (p *PostgresVectorIntegration) ExecuteWithPostgres(params map[string]interf
 				}
 			}
 
-			chunk = &document.DocumentChunk{
+			commonChunk = &common.DocumentChunk{
 				Content:    content,
 				DocumentID: result.Vector.ID,
+				ChunkIndex: 0,
 				Metadata:   result.Vector.Metadata,
 			}
 		}
 
 		searchResults[i] = &search.VectorSearchResult{
-			Chunk:    chunk,
+			Chunk:    commonChunk,
 			Score:    result.Score,
 			Metadata: result.Vector.Metadata,
 		}
@@ -216,20 +227,35 @@ func (p *PostgresVectorIntegration) StoreDocumentChunks(ctx context.Context, chu
 }
 
 // CreateDocumentSearchTool 创建文档搜索工具
-func (p *PostgresVectorIntegration) CreateDocumentSearchTool(chunker *document.DocumentChunker, chunkSize int, chunkOverlap int, chunkStrategy document.ChunkStrategy) (*document.DocumentSearchAdapter, error) {
+func (p *PostgresVectorIntegration) CreateDocumentSearchTool(chunker *document.DocumentChunker, chunkSize int, chunkOverlap int, chunkStrategy document.ChunkStrategy) (*document.DocumentSearchAdapterImpl, error) {
 	// 首先创建向量搜索工具
 	vectorTool, err := p.CreateSearchTool()
 	if err != nil {
 		return nil, err
 	}
 
+	// 将document.ChunkStrategy转换为common.ChunkStrategy
+	var commonStrategy common.ChunkStrategy
+	switch chunkStrategy {
+	case document.StrategyFixed:
+		commonStrategy = common.ChunkStrategyFixed
+	case document.StrategyRecursive:
+		commonStrategy = common.ChunkStrategyRecursive
+	case document.StrategyParagraph:
+		commonStrategy = common.ChunkStrategyParagraph
+	case document.StrategySentence:
+		commonStrategy = common.ChunkStrategySentence
+	default:
+		commonStrategy = common.ChunkStrategyFixed
+	}
+
 	// 创建一个适配器来连接PostgreSQL和文档搜索功能
-	adapter := &document.DocumentSearchAdapter{
+	adapter := &document.DocumentSearchAdapterImpl{
 		VectorTool:     vectorTool,
 		Chunker:        chunker,
 		ChunkSize:      chunkSize,
 		ChunkOverlap:   chunkOverlap,
-		ChunkStrategy:  chunkStrategy,
+		ChunkStrategy:  commonStrategy,
 		StoreChunkFunc: p.StoreDocumentChunks,
 	}
 
