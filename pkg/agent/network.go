@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"log"
 	"sync"
@@ -10,7 +10,7 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/google/uuid"
-	"github.com/yourusername/gostra/pkg/errors"
+	pkgerrors "github.com/yourusername/gostra/pkg/errors"
 	"github.com/yourusername/gostra/pkg/models"
 )
 
@@ -42,10 +42,10 @@ type AgentNetwork struct {
 	agents map[string]*actor.PID
 
 	// Router agent for dynamic routing
-	router *RouterAgent
+	routerPID *actor.PID
 
 	// Supervisor for error handling
-	supervisor *errors.Supervisor
+	supervisor *pkgerrors.Supervisor
 
 	// Model provider for LLM operations
 	model models.ModelProvider
@@ -53,17 +53,18 @@ type AgentNetwork struct {
 
 // AgentNetworkOptions 创建网络的选项
 type AgentNetworkOptions struct {
-	ID          string
-	Name        string
-	Description string
-	AgentIDs    []string
-	ActorSystem *actor.ActorSystem
+	ID            string
+	Name          string
+	Description   string
+	AgentIDs      []string
+	ActorSystem   *actor.ActorSystem
+	RouterOptions *RouterOptions // Options for configuring the router agent
 }
 
 // NewAgentNetwork 创建一个新的Agent网络
 func NewAgentNetwork(opts *AgentNetworkOptions, model models.ModelProvider) (*AgentNetwork, error) {
 	if opts == nil {
-		return nil, errors.New("options cannot be nil")
+		return nil, stderrors.New("options cannot be nil")
 	}
 
 	id := opts.ID
@@ -78,7 +79,7 @@ func NewAgentNetwork(opts *AgentNetworkOptions, model models.ModelProvider) (*Ag
 
 	actorSystem := opts.ActorSystem
 	if actorSystem == nil {
-		return nil, errors.New("actor system is required")
+		return nil, stderrors.New("actor system is required")
 	}
 
 	network := &AgentNetwork{
@@ -92,7 +93,7 @@ func NewAgentNetwork(opts *AgentNetworkOptions, model models.ModelProvider) (*Ag
 		rootContext: actor.NewRootContext(actorSystem, nil),
 		agents:      make(map[string]*actor.PID),
 		model:       model,
-		supervisor:  errors.NewSupervisor(actorSystem, nil),
+		supervisor:  pkgerrors.NewSupervisor(actorSystem, nil),
 	}
 
 	// 添加初始Agent
@@ -100,16 +101,18 @@ func NewAgentNetwork(opts *AgentNetworkOptions, model models.ModelProvider) (*Ag
 		network.AgentIDs = append(network.AgentIDs, agentID)
 	}
 
-	// Create router agent
+	// Create router agent with the provided options
 	routerProps := actor.PropsFromProducer(func() actor.Actor {
-		return NewRouterAgent(network)
+		return NewRouterAgent(network, opts.RouterOptions)
 	})
+
 	routerPID, err := actorSystem.Root.SpawnNamed(routerProps, "router")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create router agent: %w", err)
 	}
 
-	network.router = routerPID.Interface().(*RouterAgent)
+	// Store the PID rather than trying to get the actual RouterAgent
+	network.routerPID = routerPID
 
 	return network, nil
 }
@@ -599,9 +602,9 @@ func (n *AgentNetwork) Transmit(ctx context.Context, msg *NetworkMessage) error 
 	n.mu.RUnlock()
 
 	if !exists {
-		return errors.NewAgentError(
-			errors.ActorError,
-			errors.Error,
+		return pkgerrors.NewAgentError(
+			pkgerrors.ActorError,
+			pkgerrors.Error,
 			"Target agent not found",
 			nil,
 			true,
@@ -643,9 +646,9 @@ func (n *AgentNetwork) BroadcastMessage(ctx context.Context, msg *NetworkMessage
 	}
 
 	if len(errs) > 0 {
-		return errors.NewAgentError(
-			errors.SystemError,
-			errors.Error,
+		return pkgerrors.NewAgentError(
+			pkgerrors.SystemError,
+			pkgerrors.Error,
 			"Broadcast failed for some targets",
 			errs[0],
 			true,

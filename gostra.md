@@ -65,6 +65,8 @@ Gostra是基于Go语言和protoactor-go实现的AI Agent框架，参考了Mastra
 - [x] 添加消息广播功能
 - [x] 集成LLM路由决策
 - [x] 添加单元测试
+- [x] 实现可配置超时系统
+- [x] 基于场景优化的超时策略
 
 2. 工作流系统
 - [x] 实现工作流步骤
@@ -139,6 +141,8 @@ gostra/
 ├── pkg/
 │   ├── actor/        # Actor系统基础
 │   ├── agent/        # Agent实现
+│   │   └── router.go      # 路由代理，支持可配置超时
+│   │   └── network.go     # 代理网络实现
 │   ├── api/          # API接口
 │   │   └── plugin.go      # API插件系统
 │   │   └── auth.go        # 认证和授权
@@ -194,6 +198,7 @@ gostra/
    - 基于protoactor-go实现的高性能Actor模型
    - 支持并发执行和消息传递的Agent系统
    - 动态路由和错误恢复机制
+   - 可配置的超时系统，支持基于不同操作类型的超时策略
 
 2. 向量搜索和RAG系统
    - 实现了完整的向量搜索工具链

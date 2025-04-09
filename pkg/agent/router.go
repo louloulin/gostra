@@ -11,17 +11,41 @@ import (
 	"github.com/yourusername/gostra/pkg/models"
 )
 
+// RouterOptions contains configuration options for the RouterAgent
+type RouterOptions struct {
+	DefaultTimeout    time.Duration // Default timeout for agent communication
+	RoutingTimeout    time.Duration // Timeout specifically for LLM routing decisions
+	ParallelTimeout   time.Duration // Timeout for parallel agent calls
+	SequentialTimeout time.Duration // Timeout for sequential agent calls
+}
+
+// DefaultRouterOptions returns the default options for RouterAgent
+func DefaultRouterOptions() *RouterOptions {
+	return &RouterOptions{
+		DefaultTimeout:    30 * time.Second,
+		RoutingTimeout:    15 * time.Second,
+		ParallelTimeout:   45 * time.Second,
+		SequentialTimeout: 30 * time.Second,
+	}
+}
+
 // RouterAgent handles dynamic message routing in the agent network
 type RouterAgent struct {
 	network *AgentNetwork
 	model   models.ModelProvider
+	options *RouterOptions
 }
 
 // NewRouterAgent creates a new router agent
-func NewRouterAgent(network *AgentNetwork) *RouterAgent {
+func NewRouterAgent(network *AgentNetwork, options *RouterOptions) *RouterAgent {
+	if options == nil {
+		options = DefaultRouterOptions()
+	}
+
 	return &RouterAgent{
 		network: network,
 		model:   network.model,
+		options: options,
 	}
 }
 
@@ -207,7 +231,8 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 			}
 
 			// Send message to agent
-			// Assuming agent is already a *actor.PID
+			// Use the parallel timeout for parallel calls
+			timeout := r.options.ParallelTimeout
 			future := ctx.RequestFuture(agent, message, timeout)
 			result, err := future.Result()
 			if err != nil {
@@ -265,7 +290,8 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 		}
 
 		// Send message to agent
-		// Assuming agent is already a *actor.PID
+		// Use the sequential timeout for sequential calls
+		timeout := r.options.SequentialTimeout
 		future := ctx.RequestFuture(agent, message, timeout)
 		result, err := future.Result()
 		if err != nil {
@@ -386,6 +412,8 @@ func (r *RouterAgent) handleNetworkMessage(ctx actor.Context, msg *NetworkMessag
 		}
 
 		// Forward message to target agent
+		// Use the default timeout for direct message routing
+		timeout := r.options.DefaultTimeout
 		future := ctx.RequestFuture(agent, msg, timeout)
 		result, err := future.Result()
 		if err != nil {
@@ -425,6 +453,3 @@ func (r *RouterAgent) GetAgentList() []string {
 	}
 	return agents
 }
-
-// Define a timeout for agent communication
-const timeout = 10 * time.Second
