@@ -27,33 +27,45 @@ func (m *MockStreamModelProvider) Generate(ctx context.Context, messages []model
 	return "This is a mock response", nil
 }
 
+// Add the GenerateWithFunctionCalls method
+func (m *MockStreamModelProvider) GenerateWithFunctionCalls(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (*models.ResponseWithFunctionCalls, error) {
+	return &models.ResponseWithFunctionCalls{
+		Text:         "This is a mock response",
+		FinishReason: "stop",
+	}, nil
+}
+
 func (m *MockStreamModelProvider) Stream(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (<-chan string, error) {
-	// 创建一个通道来传递流式响应
-	outChan := make(chan string, 10)
+	ch := make(chan string, 5)
 
-	// 启动一个goroutine来模拟流式输出
 	go func() {
-		defer close(outChan)
+		defer close(ch)
 
-		// 模拟多个消息块
-		chunks := []string{
-			"This ", "is ", "a ", "test ", "of ", "streaming ", "response ",
-			"with ", "multiple ", "chunks.",
-		}
-
-		for _, chunk := range chunks {
-			select {
-			case <-ctx.Done():
-				// 上下文取消，停止发送
-				return
-			case outChan <- chunk:
-				// 成功发送块
-				time.Sleep(50 * time.Millisecond) // 添加延迟模拟网络延迟
-			}
-		}
+		ch <- "This "
+		ch <- "is "
+		ch <- "a "
+		ch <- "streaming "
+		ch <- "response."
 	}()
 
-	return outChan, nil
+	return ch, nil
+}
+
+// Add the StreamWithFunctionCalls method
+func (m *MockStreamModelProvider) StreamWithFunctionCalls(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (<-chan *models.ResponseChunk, error) {
+	ch := make(chan *models.ResponseChunk, 5)
+
+	go func() {
+		defer close(ch)
+
+		ch <- &models.ResponseChunk{Text: "This ", IsFinished: false}
+		ch <- &models.ResponseChunk{Text: "is ", IsFinished: false}
+		ch <- &models.ResponseChunk{Text: "a ", IsFinished: false}
+		ch <- &models.ResponseChunk{Text: "streaming ", IsFinished: false}
+		ch <- &models.ResponseChunk{Text: "response.", IsFinished: true, FinishReason: "stop"}
+	}()
+
+	return ch, nil
 }
 
 func TestAgentStreaming(t *testing.T) {

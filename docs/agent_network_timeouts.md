@@ -72,9 +72,36 @@ When configuring timeouts, consider the following best practices:
 - **Default Timeout**: Set this based on the average expected response time of your agents
 - **Sequential Timeout**: Should be sufficient for your most complex single-agent operation
 
+## Troubleshooting Timeout Issues
+
+If you're experiencing timeout errors in your agent network, try the following:
+
+1. **API Handler and Router Timeout Mismatch**: Ensure that the API handler timeout and router timeouts are aligned. If your API handler waits 30 seconds but your router times out after 10 seconds, you'll see timeout errors.
+
+2. **Monitor Agent Response Times**: Use logging to track how long agents take to respond, then adjust timeout values accordingly.
+
+3. **Gradual Increments**: If you're unsure what timeout values to use, start with the defaults and gradually increase them if needed, rather than setting extremely high values.
+
+4. **Different Timeouts for Different Tasks**: Consider using different timeout configurations for different types of agent networks, based on their specific workloads.
+
+5. **Timeout Cascade**: Be aware that timeouts can cascade through your system - if one agent times out, it could cause other agents waiting for its response to time out as well.
+
 ## Error Handling
 
-When a timeout occurs, the system will propagate appropriate error messages. Make sure to implement proper error handling in your application to deal with timeouts gracefully.
+When a timeout occurs, the system will propagate appropriate error messages. Make sure to implement proper error handling in your application to deal with timeouts gracefully:
+
+```go
+if err := network.Transmit(ctx, msg); err != nil {
+    if strings.Contains(err.Error(), "timeout") {
+        // Handle timeout specifically
+        log.Printf("Operation timed out: %v. Consider increasing the timeout.", err)
+        // Implement recovery strategy
+    } else {
+        // Handle other errors
+        log.Printf("Error: %v", err)
+    }
+}
+```
 
 ## Example
 

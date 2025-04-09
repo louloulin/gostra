@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -211,6 +212,29 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 	results := make([]AgentResponse, len(req.Agents))
 	errors := make([]error, len(req.Agents))
 
+	// Create a shared context map (thread-safe map for parallel updates)
+	type contextUpdate struct {
+		agentName string
+		data      map[string]interface{}
+	}
+	contextChan := make(chan contextUpdate, len(req.Agents))
+
+	// Add a conversation trace if not present
+	updatedContext := make(map[string]interface{})
+	if req.Context != nil {
+		for k, v := range req.Context {
+			updatedContext[k] = v
+		}
+	}
+
+	if _, hasTrace := updatedContext["conversation_trace"]; !hasTrace {
+		updatedContext["conversation_trace"] = []string{}
+	}
+
+	if _, hasContribs := updatedContext["agent_contributions"]; !hasContribs {
+		updatedContext["agent_contributions"] = make(map[string]interface{})
+	}
+
 	for i, agentName := range req.Agents {
 		wg.Add(1)
 		go func(index int, name string) {
@@ -222,12 +246,26 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 				return
 			}
 
+			// Clone the context to avoid race conditions
+			agentContext := make(map[string]interface{})
+			for k, v := range updatedContext {
+				agentContext[k] = v
+			}
+
+			// Update conversation trace for this agent
+			if trace, ok := agentContext["conversation_trace"].([]string); ok {
+				traceClone := make([]string, len(trace))
+				copy(traceClone, trace)
+				traceClone = append(traceClone, fmt.Sprintf("router -> %s", name))
+				agentContext["conversation_trace"] = traceClone
+			}
+
 			// Create message for agent
 			message := &NetworkMessage{
 				From:    "router",
 				To:      name,
 				Content: req.Message,
-				Data:    req.Context,
+				Data:    agentContext,
 			}
 
 			// Send message to agent
@@ -247,22 +285,120 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 					Content: response.Content,
 					Data:    response.Data,
 				}
+
+				// Update conversation trace
+				if trace, ok := agentContext["conversation_trace"].([]string); ok {
+					traceClone := make([]string, len(trace))
+					copy(traceClone, trace)
+					traceClone = append(traceClone, fmt.Sprintf("%s -> router", name))
+					agentContext["conversation_trace"] = traceClone
+				}
+
+				// Get response data for context update
+				if responseData, ok := response.Data.(map[string]interface{}); ok {
+					// Send this agent's context update to the channel
+					contextChan <- contextUpdate{
+						agentName: name,
+						data:      responseData,
+					}
+				}
 			} else {
 				errors[index] = fmt.Errorf("unexpected response type from agent %s", name)
 			}
 		}(i, agentName)
 	}
 
+	// Wait for all goroutines to complete
 	wg.Wait()
+	close(contextChan)
+
+	// Process all the context updates
+	allContextUpdates := make(map[string]map[string]interface{})
+	contributions := make(map[string]interface{})
+
+	// Extract any existing contributions
+	if existingContribs, ok := updatedContext["agent_contributions"].(map[string]interface{}); ok {
+		for k, v := range existingContribs {
+			contributions[k] = v
+		}
+	}
+
+	// Collect context updates from all agents
+	for update := range contextChan {
+		allContextUpdates[update.agentName] = update.data
+
+		// Record this agent's contribution
+		contributions[update.agentName] = map[string]interface{}{
+			"timestamp": time.Now().Unix(),
+			"content":   results[getIndexForAgent(update.agentName, req.Agents)].Content,
+		}
+	}
+
+	// Update the agent_contributions in the context
+	updatedContext["agent_contributions"] = contributions
+
+	// Merge all context updates
+	for _, contextData := range allContextUpdates {
+		for k, v := range contextData {
+			// Don't overwrite conversation_trace or agent_contributions
+			if k != "conversation_trace" && k != "agent_contributions" {
+				updatedContext[k] = v
+			}
+		}
+	}
+
+	// Update conversation trace with all steps
+	var allTraces []string
+	if trace, ok := updatedContext["conversation_trace"].([]string); ok {
+		allTraces = trace
+	}
+
+	// Collect all traces from agent context updates
+	for agentName, contextData := range allContextUpdates {
+		if trace, ok := contextData["conversation_trace"].([]string); ok {
+			for _, step := range trace {
+				// Only add steps that aren't already in the trace
+				if !contains(allTraces, step) &&
+					(strings.HasPrefix(step, "router -> "+agentName) ||
+						strings.HasPrefix(step, agentName+" -> router")) {
+					allTraces = append(allTraces, step)
+				}
+			}
+		}
+	}
+	updatedContext["conversation_trace"] = allTraces
+
+	// Update the request context
+	req.Context = updatedContext
 
 	// Check for errors
 	for _, err := range errors {
 		if err != nil {
-			return nil, err
+			return results, err
 		}
 	}
 
 	return results, nil
+}
+
+// getIndexForAgent returns the index of the agent name in the agents slice
+func getIndexForAgent(agentName string, agents []string) int {
+	for i, name := range agents {
+		if name == agentName {
+			return i
+		}
+	}
+	return -1
+}
+
+// contains checks if a string is present in a slice
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 // callAgentsSequentially calls multiple agents in sequence and collects their responses
@@ -271,14 +407,29 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 
 	// Create a copy of the context to pass between agents
 	updatedContext := make(map[string]interface{})
-	for k, v := range req.Context {
-		updatedContext[k] = v
+	if req.Context != nil {
+		for k, v := range req.Context {
+			updatedContext[k] = v
+		}
+	} else {
+		updatedContext = make(map[string]interface{})
+	}
+
+	// Add a conversation trace if not present
+	if _, hasTrace := updatedContext["conversation_trace"]; !hasTrace {
+		updatedContext["conversation_trace"] = []string{}
 	}
 
 	for _, agentName := range req.Agents {
 		agent, err := r.network.GetAgent(agentName)
 		if err != nil {
 			return results, fmt.Errorf("agent %s not found", agentName)
+		}
+
+		// Update conversation trace
+		if trace, ok := updatedContext["conversation_trace"].([]string); ok {
+			trace = append(trace, fmt.Sprintf("router -> %s", agentName))
+			updatedContext["conversation_trace"] = trace
 		}
 
 		// Create message for agent
@@ -300,11 +451,30 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 
 		// Process response
 		if response, ok := result.(*NetworkMessage); ok {
-			results = append(results, AgentResponse{
+			// Create agent response
+			agentResp := AgentResponse{
 				Agent:   agentName,
 				Content: response.Content,
 				Data:    response.Data,
-			})
+			}
+			results = append(results, agentResp)
+
+			// Log this agent's processing in the trace
+			if trace, ok := updatedContext["conversation_trace"].([]string); ok {
+				trace = append(trace, fmt.Sprintf("%s -> router", agentName))
+				updatedContext["conversation_trace"] = trace
+			}
+
+			// Add this agent's contribution to the context history
+			agentContributions, hasContributions := updatedContext["agent_contributions"].(map[string]interface{})
+			if !hasContributions {
+				agentContributions = make(map[string]interface{})
+			}
+			agentContributions[agentName] = map[string]interface{}{
+				"timestamp": time.Now().Unix(),
+				"content":   response.Content,
+			}
+			updatedContext["agent_contributions"] = agentContributions
 
 			// Update context with agent's response data
 			if response.Data != nil {
@@ -319,6 +489,9 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 			return results, fmt.Errorf("unexpected response type from agent %s", agentName)
 		}
 	}
+
+	// Update the request context with all accumulated context
+	req.Context = updatedContext
 
 	return results, nil
 }

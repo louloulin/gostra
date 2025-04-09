@@ -57,6 +57,30 @@ type WorkflowOptions struct {
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
+// IWorkflow defines the interface for all workflow implementations
+type IWorkflow interface {
+	// GetID returns the workflow ID
+	GetID() string
+
+	// GetName returns the workflow name
+	GetName() string
+
+	// GetDescription returns the workflow description
+	GetDescription() string
+
+	// GetMetadata returns the workflow metadata
+	GetMetadata() map[string]interface{}
+
+	// GetSteps returns all workflow steps
+	GetSteps() []Step
+
+	// Run executes the workflow with the given input data and returns the result
+	Run(ctx context.Context, inputData map[string]interface{}) (map[string]interface{}, error)
+
+	// RunWithParallelSteps executes the workflow with parallel execution of independent steps
+	RunWithParallelSteps(ctx context.Context, inputData map[string]interface{}) (map[string]interface{}, error)
+}
+
 // Workflow 表示一个工作流
 type Workflow struct {
 	ID          string                 `json:"id"`
@@ -694,4 +718,16 @@ type WorkflowStatusResponse struct {
 type WorkflowCancelResponse struct {
 	WorkflowID string `json:"workflow_id"`
 	Status     string `json:"status"`
+}
+
+// NewDummyWorkflow creates a minimal workflow for testing purposes
+func NewDummyWorkflow() *Workflow {
+	return &Workflow{
+		ID:      "dummy",
+		Name:    "dummy",
+		Steps:   make(map[string]*Step),
+		Status:  StatusPending,
+		Results: make(map[string]*StepResult),
+		Context: make(map[string]interface{}),
+	}
 }

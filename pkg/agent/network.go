@@ -22,7 +22,7 @@ type NetworkMessage struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// AgentNetwork manages a network of collaborative agents
+// AgentNetwork represents a network of agents that can communicate with each other
 type AgentNetwork struct {
 	ID          string
 	Name        string
@@ -49,6 +49,9 @@ type AgentNetwork struct {
 
 	// Model provider for LLM operations
 	model models.ModelProvider
+
+	// New fields for context handling
+	contextHandler *ContextHandler
 }
 
 // AgentNetworkOptions 创建网络的选项
@@ -106,13 +109,18 @@ func NewAgentNetwork(opts *AgentNetworkOptions, model models.ModelProvider) (*Ag
 		return NewRouterAgent(network, opts.RouterOptions)
 	})
 
-	routerPID, err := actorSystem.Root.SpawnNamed(routerProps, "router")
+	// Use the network ID to create a unique router name
+	routerName := "router-" + id
+	routerPID, err := actorSystem.Root.SpawnNamed(routerProps, routerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create router agent: %w", err)
 	}
 
 	// Store the PID rather than trying to get the actual RouterAgent
 	network.routerPID = routerPID
+
+	// Create and set up the context handler
+	network.contextHandler = NewContextHandler(network)
 
 	return network, nil
 }
@@ -160,6 +168,11 @@ func (n *AgentNetwork) Stop() error {
 		n.rootContext.Stop(n.Supervisor)
 	}
 
+	// Stop the context handler
+	if n.contextHandler != nil {
+		n.contextHandler.Stop()
+	}
+
 	return nil
 }
 
@@ -204,7 +217,15 @@ func (n *AgentNetwork) RemoveAgent(agentID string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	// 查找Agent
+	// Check if the agent exists in either map
+	_, existsInAgents := n.agents[agentID]
+	_, existsInActors := n.agentActors[agentID]
+
+	if !existsInAgents && !existsInActors {
+		return fmt.Errorf("agent %s not found in network", agentID)
+	}
+
+	// 查找Agent in AgentIDs
 	var found bool
 	var index int
 	for i, id := range n.AgentIDs {
@@ -215,12 +236,13 @@ func (n *AgentNetwork) RemoveAgent(agentID string) error {
 		}
 	}
 
-	if !found {
-		return fmt.Errorf("agent %s not in network", agentID)
+	if found {
+		// 从网络中移除
+		n.AgentIDs = append(n.AgentIDs[:index], n.AgentIDs[index+1:]...)
 	}
 
-	// 从网络中移除
-	n.AgentIDs = append(n.AgentIDs[:index], n.AgentIDs[index+1:]...)
+	// 从两个maps中移除
+	delete(n.agents, agentID)
 	delete(n.agentActors, agentID)
 	delete(n.topology, agentID)
 
@@ -442,12 +464,25 @@ func (n *AgentNetwork) GetAgent(agentID string) (*actor.PID, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	pid, exists := n.agentActors[agentID]
-	if !exists {
-		return nil, fmt.Errorf("agent %s not found in network", agentID)
+	// First check the agents map
+	pid, exists := n.agents[agentID]
+	if exists {
+		return pid, nil
 	}
 
-	return pid, nil
+	// If not found, check the agentActors map
+	pid, exists = n.agentActors[agentID]
+	if exists {
+		// For consistency, add it to the agents map too
+		n.mu.RUnlock()
+		n.mu.Lock()
+		n.agents[agentID] = pid
+		n.mu.Unlock()
+		n.mu.RLock()
+		return pid, nil
+	}
+
+	return nil, fmt.Errorf("agent %s not found in network", agentID)
 }
 
 // GetAllAgents 获取网络中所有Agent的ID
@@ -577,108 +612,220 @@ type NetworkStatusResponse struct {
 	Topology    map[string][]string `json:"topology"`
 }
 
-// RegisterAgent adds an agent to the network
-func (n *AgentNetwork) RegisterAgent(name string, agent Actor) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	props := actor.PropsFromProducer(func() actor.Actor {
-		return NewActorAgent(agent, n.model)
-	})
-
-	pid, err := n.system.Root.SpawnNamed(props, name)
-	if err != nil {
-		return err
-	}
-
-	n.agents[name] = pid
-	return nil
-}
-
 // Transmit sends a message through the network
 func (n *AgentNetwork) Transmit(ctx context.Context, msg *NetworkMessage) error {
+	// Check if the message has a specific target
+	if msg.To == "" {
+		// Send to router for dynamic routing
+		if n.routerPID != nil {
+			timeout := 30 * time.Second // Default timeout
+
+			// Use actorSystem instead of system which might be nil
+			if n.actorSystem == nil {
+				return fmt.Errorf("actor system is nil")
+			}
+
+			future := n.actorSystem.Root.RequestFuture(n.routerPID, msg, timeout)
+			_, err := future.Result()
+			if err != nil {
+				return fmt.Errorf("router error: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("no target specified and no router available")
+	}
+
+	// Direct message to a specific agent
 	n.mu.RLock()
 	targetPID, exists := n.agents[msg.To]
 	n.mu.RUnlock()
 
 	if !exists {
-		return pkgerrors.NewAgentError(
-			pkgerrors.ActorError,
-			pkgerrors.Error,
-			"Target agent not found",
-			nil,
-			true,
-		)
+		return fmt.Errorf("target agent '%s' not found", msg.To)
 	}
 
-	future := n.system.Root.RequestFuture(targetPID, msg, timeout)
-	result, err := future.Result()
-	if err != nil {
-		return n.supervisor.HandleFailure(ctx, targetPID, msg.To, err)
+	// Use default timeout for direct communication
+	timeout := 30 * time.Second
+
+	// Use actorSystem instead of system which might be nil
+	if n.actorSystem == nil {
+		return fmt.Errorf("actor system is nil")
 	}
 
-	return result.(error)
+	future := n.actorSystem.Root.RequestFuture(targetPID, msg, timeout)
+	_, err := future.Result()
+	return err
 }
 
-// BroadcastMessage sends a message to multiple agents in parallel
-func (n *AgentNetwork) BroadcastMessage(ctx context.Context, msg *NetworkMessage, targets []string) error {
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(targets))
-
-	for _, target := range targets {
-		wg.Add(1)
-		go func(target string) {
-			defer wg.Done()
-			msg.To = target
-			if err := n.Transmit(ctx, msg); err != nil {
-				errChan <- err
-			}
-		}(target)
-	}
-
-	wg.Wait()
-	close(errChan)
-
-	// Collect errors
-	var errs []error
-	for err := range errChan {
-		errs = append(errs, err)
-	}
-
-	if len(errs) > 0 {
-		return pkgerrors.NewAgentError(
-			pkgerrors.SystemError,
-			pkgerrors.Error,
-			"Broadcast failed for some targets",
-			errs[0],
-			true,
-		)
-	}
-
-	return nil
-}
-
-// GetAgent retrieves an agent from the network
-func (n *AgentNetwork) GetAgent(name string) (Actor, bool) {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-
-	pid, exists := n.agents[name]
-	if !exists {
-		return nil, false
-	}
-
-	return pid.Interface().(Actor), true
-}
-
-// RemoveAgent removes an agent from the network
-func (n *AgentNetwork) RemoveAgent(name string) {
+// AddAgentPID adds an agent PID directly to the network
+// This is a simplified version for testing and examples
+func (n *AgentNetwork) AddAgentPID(name string, pid *actor.PID) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if pid, exists := n.agents[name]; exists {
-		n.supervisor.RemoveActor(pid)
-		pid.Stop()
-		delete(n.agents, name)
+	// Add to both maps to ensure consistency
+	n.agents[name] = pid
+	n.agentActors[name] = pid
+
+	// Only add to AgentIDs if it's not already there
+	for _, id := range n.AgentIDs {
+		if id == name {
+			return
+		}
 	}
+	n.AgentIDs = append(n.AgentIDs, name)
+}
+
+// RegisterAgent registers an actor as an agent in the network
+func (n *AgentNetwork) RegisterAgent(name string, agent actor.Actor) error {
+	if n.actorSystem == nil {
+		return fmt.Errorf("actor system is nil")
+	}
+
+	props := actor.PropsFromProducer(func() actor.Actor {
+		return agent
+	})
+
+	pid, err := n.actorSystem.Root.SpawnNamed(props, "agent-"+name)
+	if err != nil {
+		return fmt.Errorf("failed to spawn agent actor: %w", err)
+	}
+
+	n.AddAgentPID(name, pid)
+	return nil
+}
+
+// BroadcastMessage sends a message to multiple specified agents
+func (n *AgentNetwork) BroadcastToTargets(ctx context.Context, msg *NetworkMessage, targets []string) error {
+	var lastErr error
+
+	// Send the message to each target
+	for _, target := range targets {
+		// Create a copy of the message with the specific target
+		targetMsg := &NetworkMessage{
+			From:    msg.From,
+			To:      target,
+			Content: msg.Content,
+			Data:    msg.Data,
+		}
+
+		// Send the message to this target
+		err := n.Transmit(ctx, targetMsg)
+		if err != nil {
+			lastErr = err
+			// Continue trying other targets even if one fails
+		}
+	}
+
+	return lastErr
+}
+
+// SendRequest sends a request to the agent network through the router
+func (n *AgentNetwork) SendRequest(ctx context.Context, req *TransmitRequest) (*TransmitResponse, error) {
+	if n.routerPID == nil {
+		return nil, fmt.Errorf("router not initialized")
+	}
+
+	// Use the context timeout if available, otherwise use default timeout
+	timeout := n.getTimeout(ctx)
+
+	// Apply context enrichment if needed
+	if n.contextHandler != nil && req.Context != nil {
+		// If there's a conversation ID in the context, use it for state tracking
+		conversationID, hasConvID := req.Context["conversation_id"].(string)
+		if !hasConvID {
+			// Generate a new conversation ID if not present
+			conversationID = generateConversationID()
+			req.Context["conversation_id"] = conversationID
+		}
+
+		// Enrich the request with stored context data for this conversation
+		storedContext := n.contextHandler.GetAllContext(conversationID)
+		for k, v := range storedContext {
+			// Don't overwrite existing context values from the request
+			if _, exists := req.Context[k]; !exists {
+				req.Context[k] = v
+			}
+		}
+
+		// Add trace information
+		trace, hasTrace := req.Context["conversation_trace"].([]string)
+		if !hasTrace {
+			trace = []string{}
+		}
+		traceEntry := fmt.Sprintf("[%s] Request: %s", time.Now().Format(time.RFC3339), req.Message)
+		req.Context["conversation_trace"] = append(trace, traceEntry)
+	}
+
+	// Send the request to the router
+	future := n.actorSystem.Root.RequestFuture(n.routerPID, req, timeout)
+	result, err := future.Result()
+	if err != nil {
+		return nil, fmt.Errorf("router error: %w", err)
+	}
+
+	// Check if the result is the expected type
+	if resp, ok := result.(*TransmitResponse); ok {
+		// Process response context if we have a context handler
+		if n.contextHandler != nil && resp.Context != nil {
+			// Extract conversation ID from the context
+			conversationID, ok := resp.Context["conversation_id"].(string)
+			if !ok {
+				// If no conversation ID, generate one
+				conversationID = generateConversationID()
+				resp.Context["conversation_id"] = conversationID
+			}
+
+			// Store the context data
+			n.contextHandler.MergeContext(conversationID, resp.Context, "router")
+
+			// Update trace information
+			trace, hasTrace := resp.Context["conversation_trace"].([]string)
+			if !hasTrace {
+				trace = []string{}
+			}
+			traceEntry := fmt.Sprintf("[%s] Response: %d agent results",
+				time.Now().Format(time.RFC3339),
+				len(resp.Results))
+			resp.Context["conversation_trace"] = append(trace, traceEntry)
+
+			// Track which agents contributed to this context
+			agentContributions, hasContributions := resp.Context["agent_contributions"].(map[string]interface{})
+			if !hasContributions {
+				agentContributions = make(map[string]interface{})
+			}
+
+			for _, result := range resp.Results {
+				agentContributions[result.Agent] = time.Now().Format(time.RFC3339)
+			}
+			resp.Context["agent_contributions"] = agentContributions
+		}
+		return resp, nil
+	}
+
+	return nil, fmt.Errorf("unexpected response type: %T", result)
+}
+
+// getTimeout extracts timeout from context or returns default timeout
+func (n *AgentNetwork) getTimeout(ctx context.Context) time.Duration {
+	// Try to get timeout from context
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout := time.Until(deadline)
+		if timeout > 0 {
+			return timeout
+		}
+	}
+
+	// Use default timeout if not found in context
+	return 30 * time.Second
+}
+
+// generateConversationID generates a unique conversation ID
+func generateConversationID() string {
+	return fmt.Sprintf("conv-%d", time.Now().UnixNano())
+}
+
+// GetContextHandler returns the context handler for the network
+func (n *AgentNetwork) GetContextHandler() *ContextHandler {
+	return n.contextHandler
 }
