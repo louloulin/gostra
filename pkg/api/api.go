@@ -9,16 +9,18 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/yourusername/gostra/pkg"
-	"github.com/yourusername/gostra/pkg/agent"
+	"github.com/linchong/agent/gastra/pkg"
+	"github.com/linchong/agent/gastra/pkg/agent"
 )
 
 // Server 表示API服务器
 type Server struct {
-	router  *mux.Router
-	gostra  *pkg.Gostra
-	server  *http.Server
-	options *ServerOptions
+	router         *mux.Router
+	gostra         *pkg.Gostra
+	server         *http.Server
+	options        *ServerOptions
+	pluginRegistry *PluginRegistry
+	middlewares    []func(http.Handler) http.Handler // 中间件列表
 }
 
 // ServerOptions 包含服务器配置选项
@@ -50,16 +52,31 @@ func NewServer(gostra *pkg.Gostra, options *ServerOptions) *Server {
 	}
 
 	return &Server{
-		router:  mux.NewRouter(),
-		gostra:  gostra,
-		options: options,
+		router:         mux.NewRouter(),
+		gostra:         gostra,
+		options:        options,
+		pluginRegistry: NewPluginRegistry(),
+		middlewares:    []func(http.Handler) http.Handler{},
 	}
+}
+
+// AddMiddleware adds a middleware function to the server's middleware stack
+func (s *Server) AddMiddleware(middleware func(http.Handler) http.Handler) {
+	s.middlewares = append(s.middlewares, middleware)
+}
+
+// RegisterPlugin registers a new API plugin
+func (s *Server) RegisterPlugin(plugin *Plugin) error {
+	return s.pluginRegistry.Register(plugin)
 }
 
 // Start 启动API服务器
 func (s *Server) Start() error {
 	// 设置路由
 	s.setupRoutes()
+
+	// 注册插件路由
+	s.setupPluginRoutes()
 
 	// 创建HTTP服务器
 	addr := fmt.Sprintf("%s:%d", s.options.Host, s.options.Port)
@@ -70,6 +87,9 @@ func (s *Server) Start() error {
 		WriteTimeout: s.options.WriteTimeout,
 	}
 
+	// 应用所有中间件
+	s.applyMiddlewares()
+
 	// 启动服务器
 	log.Printf("Starting API server on %s", addr)
 	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -78,10 +98,78 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// applyMiddlewares applies all registered middlewares in order
+func (s *Server) applyMiddlewares() {
+	// 先应用系统内置中间件
+	if s.options.CorsEnabled {
+		s.router.Use(s.corsMiddleware)
+	}
+	s.router.Use(s.loggingMiddleware)
+
+	// 再应用自定义中间件
+	for _, middleware := range s.middlewares {
+		s.router.Use(middleware)
+	}
+}
+
 // Stop 停止API服务器
 func (s *Server) Stop(ctx context.Context) error {
 	log.Println("Stopping API server...")
+
+	// 关闭所有插件
+	s.pluginRegistry.Shutdown()
+
 	return s.server.Shutdown(ctx)
+}
+
+// setupPluginRoutes registers routes from all plugins
+func (s *Server) setupPluginRoutes() {
+	// Create a plugin subrouter
+	pluginRouter := s.router.PathPrefix("/plugins").Subrouter()
+
+	// Add plugin info endpoint
+	pluginRouter.HandleFunc("", s.listPluginsHandler).Methods("GET")
+
+	// Register each plugin's routes
+	for _, plugin := range s.pluginRegistry.List() {
+		if plugin.RegisterRoutes != nil {
+			// Create a subrouter for each plugin
+			pluginSubrouter := pluginRouter.PathPrefix("/" + plugin.Name).Subrouter()
+
+			// Apply plugin middleware if provided
+			if plugin.Middleware != nil {
+				pluginSubrouter.Use(plugin.Middleware)
+			}
+
+			// Let the plugin register its routes
+			plugin.RegisterRoutes(pluginSubrouter)
+
+			log.Printf("Registered routes for plugin: %s (v%s)", plugin.Name, plugin.Version)
+		}
+	}
+}
+
+// listPluginsHandler returns a list of all registered plugins
+func (s *Server) listPluginsHandler(w http.ResponseWriter, r *http.Request) {
+	plugins := s.pluginRegistry.List()
+
+	// Convert to a simpler structure for JSON response
+	type pluginInfo struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Version     string `json:"version"`
+	}
+
+	info := make([]pluginInfo, 0, len(plugins))
+	for _, p := range plugins {
+		info = append(info, pluginInfo{
+			Name:        p.Name,
+			Description: p.Description,
+			Version:     p.Version,
+		})
+	}
+
+	sendSuccess(w, "Plugins retrieved successfully", info)
 }
 
 // setupRoutes 设置API路由
@@ -109,12 +197,6 @@ func (s *Server) setupRoutes() {
 	threads.HandleFunc("/{threadID}/messages", s.listMessagesHandler).Methods("GET")
 	threads.HandleFunc("/{threadID}/messages", s.addMessageHandler).Methods("POST")
 	threads.HandleFunc("/{threadID}/messages", s.deleteMessagesHandler).Methods("DELETE")
-
-	// 添加中间件
-	if s.options.CorsEnabled {
-		s.router.Use(s.corsMiddleware)
-	}
-	s.router.Use(s.loggingMiddleware)
 }
 
 // 中间件

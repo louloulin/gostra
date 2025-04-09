@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/yourusername/gostra/pkg/models"
@@ -27,6 +30,8 @@ func (r *RouterAgent) Receive(context actor.Context) {
 	switch msg := context.Message().(type) {
 	case *NetworkMessage:
 		r.handleNetworkMessage(context, msg)
+	case *TransmitRequest:
+		r.handleTransmitRequest(context, msg)
 	case *actor.Started:
 		// Initialize router
 	case *actor.Stopping:
@@ -34,36 +39,379 @@ func (r *RouterAgent) Receive(context actor.Context) {
 	}
 }
 
-// handleNetworkMessage processes network messages and determines routing
-func (r *RouterAgent) handleNetworkMessage(ctx actor.Context, msg *NetworkMessage) {
-	// Create routing prompt
-	prompt := `Given the following message and available agents, determine the best agent(s) to handle this request:
-Message: ${msg.Content}
-Available Agents: ${r.network.GetAgentList()}
+// TransmitRequest represents a request to transmit a message to one or more agents
+type TransmitRequest struct {
+	Message      string                 `json:"message"`      // The content to transmit
+	Agents       []string               `json:"agents"`       // Optional: Specific agents to transmit to
+	ParallelCall bool                   `json:"parallelCall"` // Whether to call agents in parallel
+	Context      map[string]interface{} `json:"context"`      // Shared context
+}
 
-Please respond with the name of the agent that should handle this message.`
+// TransmitResponse represents the response from a transmit request
+type TransmitResponse struct {
+	Results    []AgentResponse        `json:"results"`    // Results from agent calls
+	NextAgents []string               `json:"nextAgents"` // Suggested next agents to call
+	Context    map[string]interface{} `json:"context"`    // Updated shared context
+	Error      string                 `json:"error,omitempty"`
+}
 
-	// Get routing decision from model
-	response, err := r.model.Generate(context.Background(), prompt, nil)
-	if err != nil {
-		ctx.Respond(err)
+// AgentResponse represents a response from a single agent
+type AgentResponse struct {
+	Agent   string      `json:"agent"`   // The agent that responded
+	Content string      `json:"content"` // The response content
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// handleTransmitRequest processes a transmit request and determines routing
+func (r *RouterAgent) handleTransmitRequest(ctx actor.Context, req *TransmitRequest) {
+	var response TransmitResponse
+	response.Context = req.Context
+	if response.Context == nil {
+		response.Context = make(map[string]interface{})
+	}
+
+	// If specific agents are provided, route to them
+	if len(req.Agents) > 0 {
+		if req.ParallelCall {
+			results, err := r.callAgentsInParallel(ctx, req)
+			if err != nil {
+				response.Error = err.Error()
+				ctx.Respond(&response)
+				return
+			}
+			response.Results = results
+		} else {
+			// Call agents sequentially
+			results, err := r.callAgentsSequentially(ctx, req)
+			if err != nil {
+				response.Error = err.Error()
+				ctx.Respond(&response)
+				return
+			}
+			response.Results = results
+		}
+
+		ctx.Respond(&response)
 		return
 	}
 
-	// Parse response and route message
-	targetAgent := response.Text
-	if agent, exists := r.network.GetAgent(targetAgent); exists {
+	// Use LLM to determine routing
+	agents, err := r.determineRoutingWithLLM(ctx, req)
+	if err != nil {
+		response.Error = fmt.Sprintf("LLM routing error: %v", err)
+		ctx.Respond(&response)
+		return
+	}
+
+	// Call the determined agents
+	req.Agents = agents
+	results, err := r.callAgentsSequentially(ctx, req)
+	if err != nil {
+		response.Error = err.Error()
+		ctx.Respond(&response)
+		return
+	}
+
+	response.Results = results
+
+	// Suggest next agents that might be relevant
+	nextAgents, err := r.suggestNextAgents(ctx, req, results)
+	if err != nil {
+		// Non-critical error, just log
+		fmt.Printf("Error suggesting next agents: %v\n", err)
+	} else {
+		response.NextAgents = nextAgents
+	}
+
+	ctx.Respond(&response)
+}
+
+// determineRoutingWithLLM uses the model to determine the best agent(s) to handle the request
+func (r *RouterAgent) determineRoutingWithLLM(ctx actor.Context, req *TransmitRequest) ([]string, error) {
+	// Create a prompt for the model
+	agentDescriptions := r.getAgentDescriptions()
+
+	prompt := fmt.Sprintf(`You are a router in a multi-agent system. Based on the user request, determine which agent(s) would be best to handle it.
+	
+User Request: %s
+	
+Available Agents:
+%s
+	
+Context:
+%v
+	
+Return only the name(s) of the agent(s) that should handle this request in JSON format like {"agents": ["agent1", "agent2"]}`,
+		req.Message,
+		agentDescriptions,
+		req.Context)
+
+	// Call the model
+	generateRequest := []models.Message{
+		{
+			Role:    "system",
+			Content: "You are a router agent that determines which specialized agents should process a request.",
+		},
+		{
+			Role:    "user",
+			Content: prompt,
+		},
+	}
+
+	responseText, err := r.model.Generate(context.Background(), generateRequest, &models.GenerateOptions{
+		Temperature: 0.1, // Low temperature for more deterministic routing
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	// Parse the response
+	var result struct {
+		Agents []string `json:"agents"`
+	}
+
+	err = json.Unmarshal([]byte(responseText), &result)
+	if err != nil {
+		// Fallback: try to parse the text directly if JSON parsing fails
+		// This handles cases where the model didn't return valid JSON
+		return []string{responseText}, nil
+	}
+
+	return result.Agents, nil
+}
+
+// callAgentsInParallel calls multiple agents in parallel and collects their responses
+func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitRequest) ([]AgentResponse, error) {
+	var wg sync.WaitGroup
+	results := make([]AgentResponse, len(req.Agents))
+	errors := make([]error, len(req.Agents))
+
+	for i, agentName := range req.Agents {
+		wg.Add(1)
+		go func(index int, name string) {
+			defer wg.Done()
+
+			agent, err := r.network.GetAgent(name)
+			if err != nil {
+				errors[index] = fmt.Errorf("agent %s not found", name)
+				return
+			}
+
+			// Create message for agent
+			message := &NetworkMessage{
+				From:    "router",
+				To:      name,
+				Content: req.Message,
+				Data:    req.Context,
+			}
+
+			// Send message to agent
+			// Assuming agent is already a *actor.PID
+			future := ctx.RequestFuture(agent, message, timeout)
+			result, err := future.Result()
+			if err != nil {
+				errors[index] = err
+				return
+			}
+
+			// Process response
+			if response, ok := result.(*NetworkMessage); ok {
+				results[index] = AgentResponse{
+					Agent:   name,
+					Content: response.Content,
+					Data:    response.Data,
+				}
+			} else {
+				errors[index] = fmt.Errorf("unexpected response type from agent %s", name)
+			}
+		}(i, agentName)
+	}
+
+	wg.Wait()
+
+	// Check for errors
+	for _, err := range errors {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return results, nil
+}
+
+// callAgentsSequentially calls multiple agents in sequence and collects their responses
+func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitRequest) ([]AgentResponse, error) {
+	results := make([]AgentResponse, 0, len(req.Agents))
+
+	// Create a copy of the context to pass between agents
+	updatedContext := make(map[string]interface{})
+	for k, v := range req.Context {
+		updatedContext[k] = v
+	}
+
+	for _, agentName := range req.Agents {
+		agent, err := r.network.GetAgent(agentName)
+		if err != nil {
+			return results, fmt.Errorf("agent %s not found", agentName)
+		}
+
+		// Create message for agent
+		message := &NetworkMessage{
+			From:    "router",
+			To:      agentName,
+			Content: req.Message,
+			Data:    updatedContext,
+		}
+
+		// Send message to agent
+		// Assuming agent is already a *actor.PID
+		future := ctx.RequestFuture(agent, message, timeout)
+		result, err := future.Result()
+		if err != nil {
+			return results, err
+		}
+
+		// Process response
+		if response, ok := result.(*NetworkMessage); ok {
+			results = append(results, AgentResponse{
+				Agent:   agentName,
+				Content: response.Content,
+				Data:    response.Data,
+			})
+
+			// Update context with agent's response data
+			if response.Data != nil {
+				contextData, isMap := response.Data.(map[string]interface{})
+				if isMap {
+					for k, v := range contextData {
+						updatedContext[k] = v
+					}
+				}
+			}
+		} else {
+			return results, fmt.Errorf("unexpected response type from agent %s", agentName)
+		}
+	}
+
+	return results, nil
+}
+
+// suggestNextAgents uses the model to suggest which agents might be relevant next
+func (r *RouterAgent) suggestNextAgents(ctx actor.Context, req *TransmitRequest, results []AgentResponse) ([]string, error) {
+	// Create a prompt for the model
+	agentDescriptions := r.getAgentDescriptions()
+
+	// Combine all results for context
+	combinedResults := ""
+	for _, result := range results {
+		combinedResults += fmt.Sprintf("Agent %s response: %s\n", result.Agent, result.Content)
+	}
+
+	prompt := fmt.Sprintf(`Based on the user request and the responses from agents so far, suggest which agent(s) might be relevant to call next:
+	
+User Request: %s
+
+Agent Responses:
+%s
+
+Available Agents:
+%s
+
+Context:
+%v
+
+Return only the name(s) of the agent(s) that should be called next in JSON format like {"agents": ["agent1", "agent2"]}`,
+		req.Message,
+		combinedResults,
+		agentDescriptions,
+		req.Context)
+
+	// Call the model
+	generateRequest := []models.Message{
+		{
+			Role:    "system",
+			Content: "You are a router agent that determines which specialized agents should be called next in a workflow.",
+		},
+		{
+			Role:    "user",
+			Content: prompt,
+		},
+	}
+
+	responseText, err := r.model.Generate(context.Background(), generateRequest, &models.GenerateOptions{
+		Temperature: 0.2,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	// Parse the response
+	var result struct {
+		Agents []string `json:"agents"`
+	}
+
+	err = json.Unmarshal([]byte(responseText), &result)
+	if err != nil {
+		// If JSON parsing fails, return empty list (non-critical error)
+		return []string{}, nil
+	}
+
+	return result.Agents, nil
+}
+
+// getAgentDescriptions returns descriptions of all registered agents
+func (r *RouterAgent) getAgentDescriptions() string {
+	r.network.mu.RLock()
+	defer r.network.mu.RUnlock()
+
+	descriptions := ""
+	for name := range r.network.agents {
+		// TODO: Get actual descriptions from agent metadata
+		descriptions += fmt.Sprintf("- %s\n", name)
+	}
+
+	return descriptions
+}
+
+// handleNetworkMessage processes network messages and determines routing
+func (r *RouterAgent) handleNetworkMessage(ctx actor.Context, msg *NetworkMessage) {
+	// If the message has a specific target, route directly
+	if msg.To != "" {
+		agent, err := r.network.GetAgent(msg.To)
+		if err != nil {
+			ctx.Respond(fmt.Errorf("target agent %s not found", msg.To))
+			return
+		}
+
 		// Forward message to target agent
-		future := ctx.RequestFuture(agent.(*actor.PID), msg, timeout)
+		future := ctx.RequestFuture(agent, msg, timeout)
 		result, err := future.Result()
 		if err != nil {
 			ctx.Respond(err)
 			return
 		}
 		ctx.Respond(result)
-	} else {
-		ctx.Respond(fmt.Errorf("target agent %s not found", targetAgent))
+		return
 	}
+
+	// Create routing request for LLM-based routing
+	req := &TransmitRequest{
+		Message: msg.Content,
+		Context: nil,
+	}
+
+	// Convert message data to context if possible
+	if msg.Data != nil {
+		contextData, isMap := msg.Data.(map[string]interface{})
+		if isMap {
+			req.Context = contextData
+		}
+	}
+
+	// Handle as a transmit request
+	r.handleTransmitRequest(ctx, req)
 }
 
 // GetAgentList returns a list of available agents
@@ -77,3 +425,6 @@ func (r *RouterAgent) GetAgentList() []string {
 	}
 	return agents
 }
+
+// Define a timeout for agent communication
+const timeout = 10 * time.Second

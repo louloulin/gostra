@@ -4,41 +4,135 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 
+	"github.com/google/uuid"
 	"github.com/yourusername/gostra/pkg/actor"
-	"github.com/yourusername/gostra/pkg/agent"
 	"github.com/yourusername/gostra/pkg/models"
 	"github.com/yourusername/gostra/pkg/tools"
 )
 
-// Gostra 是框架的主入口类
+// Agent represents an AI agent that can process messages and generate responses
+type Agent interface {
+	// Generate processes a message and returns a response
+	Generate(message string, options GenerateOptions) (*GenerateResponse, error)
+
+	// Stream processes a message and streams the response
+	Stream(message string, options StreamOptions) (*StreamResponse, error)
+
+	// GetInfo returns information about the agent
+	GetInfo() AgentInfo
+}
+
+// Message represents a message in a conversation
+type Message struct {
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+// ToolCall represents a tool call in a message
+type ToolCall struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// GenerateOptions contains options for generating a response
+type GenerateOptions struct {
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Temperature float64   `json:"temperature,omitempty"`
+	Tools       []Tool    `json:"tools,omitempty"`
+	History     []Message `json:"history,omitempty"`
+}
+
+// StreamOptions contains options for streaming a response
+type StreamOptions struct {
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Temperature float64   `json:"temperature,omitempty"`
+	Tools       []Tool    `json:"tools,omitempty"`
+	History     []Message `json:"history,omitempty"`
+}
+
+// Tool represents a tool that an agent can use
+type Tool struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Schema      any    `json:"schema,omitempty"`
+}
+
+// GenerateResponse contains the response from generating a message
+type GenerateResponse struct {
+	Message Message `json:"message"`
+	Usage   Usage   `json:"usage"`
+}
+
+// StreamResponse contains the response from streaming a message
+type StreamResponse struct {
+	Message Message `json:"message"`
+	Usage   Usage   `json:"usage"`
+}
+
+// Usage contains token usage information
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// AgentInfo contains information about an agent
+type AgentInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ModelName   string `json:"model_name,omitempty"`
+}
+
+// Gostra is the main entry point for the Gostra framework
 type Gostra struct {
 	actorSystem   *actor.ActorSystem
-	agents        map[string]*agent.Agent
+	agents        map[string]Agent
+	agentsMu      sync.RWMutex
 	tools         map[string]tools.Tool
 	modelRegistry *models.ModelRegistry
+	options       *Options
 }
 
-// Config 是Gostra配置选项
+// Options contains configuration options for Gostra
+type Options struct {
+	DefaultModelProvider string
+	MaxConcurrency       int
+	Debug                bool
+}
+
+// DefaultOptions returns the default options for Gostra
+func DefaultOptions() *Options {
+	return &Options{
+		DefaultModelProvider: "openai",
+		MaxConcurrency:       10,
+		Debug:                false,
+	}
+}
+
+// Config is the configuration for Gostra
 type Config struct {
 	ActorSystemConfig *actor.Configuration
+	Options           *Options
 }
 
-// New 创建一个新的Gostra实例
-func New(config *Config) *Gostra {
-	var actorConfig *actor.Configuration
-	if config != nil {
-		actorConfig = config.ActorSystemConfig
+// NewGostra creates a new Gostra instance
+func NewGostra(options *Options) *Gostra {
+	if options == nil {
+		options = DefaultOptions()
 	}
 
-	g := &Gostra{
-		actorSystem:   actor.NewActorSystem(actorConfig),
-		agents:        make(map[string]*agent.Agent),
+	return &Gostra{
+		agents:        make(map[string]Agent),
+		options:       options,
 		tools:         make(map[string]tools.Tool),
 		modelRegistry: models.NewModelRegistry(),
 	}
-
-	return g
 }
 
 // Start 启动Gostra系统
@@ -65,39 +159,61 @@ func (g *Gostra) Stop() error {
 	return nil
 }
 
-// RegisterAgent 注册一个Agent
-func (g *Gostra) RegisterAgent(name string, a *agent.Agent) error {
-	if a == nil {
-		return errors.New("agent cannot be nil")
+// RegisterAgent registers an agent with Gostra
+func (g *Gostra) RegisterAgent(agent Agent) (string, error) {
+	if agent == nil {
+		return "", errors.New("agent cannot be nil")
 	}
 
-	if _, exists := g.agents[name]; exists {
-		return errors.New("agent already registered: " + name)
+	g.agentsMu.Lock()
+	defer g.agentsMu.Unlock()
+
+	info := agent.GetInfo()
+	if info.ID == "" {
+		info.ID = uuid.New().String()
 	}
 
-	// 创建Agent Actor
-	props := agent.NewAgentActor(a)
-
-	// 注册到Actor系统
-	pid, err := g.actorSystem.RegisterAgent(name, props)
-	if err != nil {
-		return err
-	}
-
-	// 存储Agent实例
-	g.agents[name] = a
-
-	log.Printf("Agent registered: %s (PID: %s)", name, pid.String())
-
-	return nil
+	g.agents[info.ID] = agent
+	return info.ID, nil
 }
 
-// GetAgent 获取已注册的Agent
-func (g *Gostra) GetAgent(name string) (*agent.Agent, error) {
-	if a, exists := g.agents[name]; exists {
-		return a, nil
+// GetAgent returns an agent by ID
+func (g *Gostra) GetAgent(id string) (Agent, error) {
+	g.agentsMu.RLock()
+	defer g.agentsMu.RUnlock()
+
+	agent, exists := g.agents[id]
+	if !exists {
+		return nil, errors.New("agent not found")
 	}
-	return nil, errors.New("agent not found: " + name)
+
+	return agent, nil
+}
+
+// ListAgents returns a list of all registered agents
+func (g *Gostra) ListAgents() []AgentInfo {
+	g.agentsMu.RLock()
+	defer g.agentsMu.RUnlock()
+
+	agents := make([]AgentInfo, 0, len(g.agents))
+	for _, agent := range g.agents {
+		agents = append(agents, agent.GetInfo())
+	}
+
+	return agents
+}
+
+// RemoveAgent removes an agent by ID
+func (g *Gostra) RemoveAgent(id string) error {
+	g.agentsMu.Lock()
+	defer g.agentsMu.Unlock()
+
+	if _, exists := g.agents[id]; !exists {
+		return errors.New("agent not found")
+	}
+
+	delete(g.agents, id)
+	return nil
 }
 
 // RegisterTool 注册一个工具
