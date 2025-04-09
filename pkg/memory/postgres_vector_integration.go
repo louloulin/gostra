@@ -14,12 +14,12 @@ import (
 
 // PostgresVectorIntegration 提供PostgreSQL向量存储与搜索工具的集成
 type PostgresVectorIntegration struct {
-	vectorStore *PostgresVectorStore
+	vectorStore *PostgresVectorStorage
 	embedding   search.EmbeddingProvider
 }
 
 // NewPostgresVectorIntegration 创建新的PostgreSQL向量存储集成
-func NewPostgresVectorIntegration(store *PostgresVectorStore, provider search.EmbeddingProvider) *PostgresVectorIntegration {
+func NewPostgresVectorIntegration(store *PostgresVectorStorage, provider search.EmbeddingProvider) *PostgresVectorIntegration {
 	return &PostgresVectorIntegration{
 		vectorStore: store,
 		embedding:   provider,
@@ -39,7 +39,7 @@ func (p *PostgresVectorIntegration) CreateSearchTool() (*search.VectorSearchTool
 	options := search.VectorSearchOptions{
 		EmbeddingProvider: p.embedding,
 		IndexType:         search.IndexTypeFlat,
-		Dimension:         p.vectorStore.dimension,
+		Dimension:         p.vectorStore.vectorDimension,
 		StoreText:         true,
 		DistanceMetric:    "cosine",
 	}
