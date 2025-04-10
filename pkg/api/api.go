@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/louloulin/agent/gastra/pkg"
-	"github.com/louloulin/agent/gastra/pkg/agent"
+	"github.com/louloulin/gostra/pkg"
+	"github.com/louloulin/gostra/pkg/agent"
 )
 
 // Server 表示API服务器

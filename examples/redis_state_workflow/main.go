@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"gostra/pkg/workflow"
+	"github.com/louloulin/gostra/pkg/workflow"
 
 	"github.com/google/uuid"
 )
