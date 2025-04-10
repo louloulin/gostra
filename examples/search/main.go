@@ -6,10 +6,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/yourusername/gostra/pkg/memory"
-	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/document"
-	"github.com/yourusername/gostra/pkg/tools/search"
+	"github.com/louloulin/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools/document"
+	"github.com/louloulin/gostra/pkg/tools/search"
 )
 
 // EmbeddingAdapter 适配内存包的OpenAIEmbeddingProvider到search包的EmbeddingProvider接口

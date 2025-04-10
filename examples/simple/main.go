@@ -8,11 +8,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yourusername/gostra/pkg"
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/memory"
-	"github.com/yourusername/gostra/pkg/models/openai"
-	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/models/openai"
+	"github.com/louloulin/gostra/pkg/tools"
 )
 
 func main() {

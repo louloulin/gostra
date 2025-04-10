@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
+	"github.com/louloulin/gostra/pkg/models"
 	"github.com/stretchr/testify/assert"
-	"github.com/yourusername/gostra/pkg/models"
 )
 
 // TimeoutTestModel is a basic mock for model provider

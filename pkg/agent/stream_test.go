@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/memory"
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // 创建一个模拟的模型提供者用于测试

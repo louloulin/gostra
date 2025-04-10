@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg/api"
 )
 
 // WeatherResponse represents a weather forecast response

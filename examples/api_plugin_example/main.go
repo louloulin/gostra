@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/yourusername/gostra/pkg"
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/api"
 )
 
 // CustomResponseData is our custom data structure

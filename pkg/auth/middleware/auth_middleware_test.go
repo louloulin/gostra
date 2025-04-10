@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/yourusername/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg/api"
 )
 
 // MockAuthService implements the minimum required interface for the auth middleware

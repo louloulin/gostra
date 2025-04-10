@@ -101,6 +101,6 @@ You can extend this example by:
 
 ## Additional Resources
 
-- [Graph RAG documentation](https://github.com/yourusername/gostra/docs/graph_rag.md)
-- [Knowledge graph visualization tools](https://github.com/yourusername/gostra/tools/graph_viz/README.md)
-- [Advanced metadata filtering with Graph RAG](https://github.com/yourusername/gostra/examples/advanced_filtering/README.md) 
+- [Graph RAG documentation](https://github.com/louloulin/gostra/docs/graph_rag.md)
+- [Knowledge graph visualization tools](https://github.com/louloulin/gostra/tools/graph_viz/README.md)
+- [Advanced metadata filtering with Graph RAG](https://github.com/louloulin/gostra/examples/advanced_filtering/README.md) 

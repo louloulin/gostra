@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // OpenAIVoiceProvider implements the VoiceProvider interface for OpenAI's voice services

@@ -10,7 +10,7 @@
 
 ### 报告问题
 
-如果您发现了问题或有功能请求，请先检查[现有 issues](https://github.com/yourusername/gostra/issues)，看是否已经有人报告过相同的问题。如果没有，请创建一个新的 issue，并提供以下信息：
+如果您发现了问题或有功能请求，请先检查[现有 issues](https://github.com/louloulin/gostra/issues)，看是否已经有人报告过相同的问题。如果没有，请创建一个新的 issue，并提供以下信息：
 
 1. 清晰描述问题或功能请求
 2. 如何重现问题（对于错误报告）
@@ -39,7 +39,7 @@
 1. **设置开发环境**
 
 ```bash
-git clone https://github.com/yourusername/gostra.git
+git clone https://github.com/louloulin/gostra.git
 cd gostra
 go mod tidy
 ```

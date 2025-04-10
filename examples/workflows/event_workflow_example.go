@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/linchong/agent/gastra/gostra/pkg/workflow"
+	"github.com/louloulin/agent/gastra/gostra/pkg/workflow"
 )
 
 // RunEventWorkflowExample 运行事件驱动工作流示例

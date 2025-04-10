@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/yourusername/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg/api"
 )
 
 func TestRBACMiddleware(t *testing.T) {

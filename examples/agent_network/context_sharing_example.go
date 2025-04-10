@@ -4,7 +4,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/yourusername/gostra/examples/agent_network/context_sharing"
+	"github.com/louloulin/gostra/examples/agent_network/context_sharing"
 )
 
 func main() {

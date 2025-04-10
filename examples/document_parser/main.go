@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/document"
+	"github.com/louloulin/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools/document"
 )
 
 func main() {

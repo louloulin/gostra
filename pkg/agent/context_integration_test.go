@@ -8,8 +8,8 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/google/uuid"
+	"github.com/louloulin/gostra/pkg/models"
 	"github.com/stretchr/testify/suite"
-	"github.com/yourusername/gostra/pkg/models"
 )
 
 // TestMockModel for testing

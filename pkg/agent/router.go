@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // RouterOptions contains configuration options for the RouterAgent

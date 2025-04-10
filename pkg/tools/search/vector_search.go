@@ -6,8 +6,8 @@ import (
 	"math"
 	"sort"
 
-	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/common"
+	"github.com/louloulin/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools/common"
 )
 
 // EmbeddingProvider 嵌入向量提供者接口

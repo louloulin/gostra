@@ -7,9 +7,9 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/yourusername/gostra/pkg/actor"
-	"github.com/yourusername/gostra/pkg/models"
-	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/actor"
+	"github.com/louloulin/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/tools"
 )
 
 // Agent represents an AI agent that can process messages and generate responses

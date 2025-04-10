@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/models/openai"
-	"github.com/yourusername/gostra/pkg/workflow"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/models/openai"
+	"github.com/louloulin/gostra/pkg/workflow"
 )
 
 // This example demonstrates how to create a parallel workflow using Gostra

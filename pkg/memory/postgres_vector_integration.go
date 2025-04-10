@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yourusername/gostra/pkg/tools/common"
-	"github.com/yourusername/gostra/pkg/tools/document"
-	"github.com/yourusername/gostra/pkg/tools/search"
+	"github.com/louloulin/gostra/pkg/tools/common"
+	"github.com/louloulin/gostra/pkg/tools/document"
+	"github.com/louloulin/gostra/pkg/tools/search"
 )
 
 // PostgresVectorIntegration 提供PostgreSQL向量存储与搜索工具的集成

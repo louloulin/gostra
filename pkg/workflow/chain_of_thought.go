@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // ChainOfThoughtStep represents a step in a chain-of-thought reasoning workflow

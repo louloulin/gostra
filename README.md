@@ -25,7 +25,7 @@ Gostra是一个基于[protoactor-go](https://github.com/asynkron/protoactor-go)�
 ### 安装
 
 ```bash
-go get github.com/yourusername/gostra
+go get github.com/louloulin/gostra
 ```
 
 ### 基本示例
@@ -37,9 +37,9 @@ import (
     "context"
     "fmt"
     
-    "github.com/yourusername/gostra"
-    "github.com/yourusername/gostra/agent"
-    "github.com/yourusername/gostra/models/openai"
+    "github.com/louloulin/gostra"
+    "github.com/louloulin/gostra/agent"
+    "github.com/louloulin/gostra/models/openai"
 )
 
 func main() {

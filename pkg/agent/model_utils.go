@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yourusername/gostra/pkg/memory"
-	"github.com/yourusername/gostra/pkg/models"
-	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/tools"
 )
 
 // RunOptions 是运行Agent的选项

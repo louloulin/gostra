@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/common"
+	"github.com/louloulin/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools/common"
 )
 
 // VectorSearchResult 向量搜索结果

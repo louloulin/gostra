@@ -7,12 +7,12 @@ import (
 	"os"
 
 	"github.com/asynkron/protoactor-go/actor"
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/models"
-	"github.com/yourusername/gostra/pkg/models/openai"
-	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/search"
-	"github.com/yourusername/gostra/pkg/workflow"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models/openai"
+	"github.com/louloulin/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools/search"
+	"github.com/louloulin/gostra/pkg/workflow"
 )
 
 func main() {

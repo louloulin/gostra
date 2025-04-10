@@ -10,8 +10,8 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/google/uuid"
-	pkgerrors "github.com/yourusername/gostra/pkg/errors"
-	"github.com/yourusername/gostra/pkg/models"
+	pkgerrors "github.com/louloulin/gostra/pkg/errors"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // NetworkMessage represents a message in the agent network

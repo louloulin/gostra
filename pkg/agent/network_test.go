@@ -7,9 +7,9 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/google/uuid"
+	"github.com/louloulin/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/models"
 	"github.com/stretchr/testify/assert"
-	"github.com/yourusername/gostra/pkg/memory"
-	"github.com/yourusername/gostra/pkg/models"
 )
 
 // MockAgent implements the Actor interface for testing

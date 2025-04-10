@@ -14,10 +14,10 @@
 
 在以下包之间存在导入循环：
 ```
-github.com/yourusername/gostra/pkg/agent
-github.com/yourusername/gostra/pkg/memory
-github.com/yourusername/gostra/pkg/tools/document
-github.com/yourusername/gostra/pkg/tools/search
+github.com/louloulin/gostra/pkg/agent
+github.com/louloulin/gostra/pkg/memory
+github.com/louloulin/gostra/pkg/tools/document
+github.com/louloulin/gostra/pkg/tools/search
 ```
 
 具体循环路径：
@@ -29,18 +29,18 @@ github.com/yourusername/gostra/pkg/tools/search
 在 `examples/search/main.go` 中的导入路径不正确：
 ```go
 import (
-    "github.com/linchong/agent/gastra/gostra/pkg/memory"
-    "github.com/linchong/agent/gastra/gostra/pkg/tools/document"
-    "github.com/linchong/agent/gastra/gostra/pkg/tools/search"
+    "github.com/louloulin/agent/gastra/gostra/pkg/memory"
+    "github.com/louloulin/agent/gastra/gostra/pkg/tools/document"
+    "github.com/louloulin/agent/gastra/gostra/pkg/tools/search"
 )
 ```
 
 而正确的导入路径应该是：
 ```go
 import (
-    "github.com/yourusername/gostra/pkg/memory"
-    "github.com/yourusername/gostra/pkg/tools/document"
-    "github.com/yourusername/gostra/pkg/tools/search"
+    "github.com/louloulin/gostra/pkg/memory"
+    "github.com/louloulin/gostra/pkg/tools/document"
+    "github.com/louloulin/gostra/pkg/tools/search"
 )
 ```
 
@@ -89,7 +89,7 @@ for id, score := range newScores {
   package search
 
   import (
-      "github.com/yourusername/gostra/pkg/tools/common"
+      "github.com/louloulin/gostra/pkg/tools/common"
   )
 
   // GraphNode 图节点
@@ -111,8 +111,8 @@ for id, score := range newScores {
       "errors"
       "fmt"
 
-      "github.com/yourusername/gostra/pkg/tools"
-      "github.com/yourusername/gostra/pkg/tools/common"
+      "github.com/louloulin/gostra/pkg/tools"
+      "github.com/louloulin/gostra/pkg/tools/common"
   )
 
   // VectorSearchInterface 定义向量搜索工具的接口
@@ -137,9 +137,9 @@ for id, score := range newScores {
   编辑 `examples/search/main.go` 文件，修改导入路径：
   ```go
   import (
-      "github.com/yourusername/gostra/pkg/memory"
-      "github.com/yourusername/gostra/pkg/tools/document"
-      "github.com/yourusername/gostra/pkg/tools/search"
+      "github.com/louloulin/gostra/pkg/memory"
+      "github.com/louloulin/gostra/pkg/tools/document"
+      "github.com/louloulin/gostra/pkg/tools/search"
   )
   ```
 

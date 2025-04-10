@@ -12,7 +12,7 @@ import (
 
 	"bufio"
 
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // 定义常量

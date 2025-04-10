@@ -6,9 +6,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/yourusername/gostra/pkg"
-	"github.com/yourusername/gostra/pkg/models"
-	"github.com/yourusername/gostra/pkg/models/openai"
+	"github.com/louloulin/gostra/pkg"
+	"github.com/louloulin/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models/openai"
 )
 
 func main() {

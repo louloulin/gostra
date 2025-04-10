@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // OpenAIImageProvider implements the ImageProvider interface for OpenAI's DALL-E models

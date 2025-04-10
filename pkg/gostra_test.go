@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // MockTextModel 模拟文本模型提供者

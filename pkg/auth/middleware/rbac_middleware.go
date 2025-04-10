@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/yourusername/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg/api"
 )
 
 // RBACOptions configures the role-based access control middleware

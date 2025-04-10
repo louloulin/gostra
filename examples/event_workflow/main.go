@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/workflow"
+	"github.com/louloulin/gostra/pkg/workflow"
 )
 
 // runEventWorkflowExample 运行事件驱动工作流示例
@@ -363,15 +363,12 @@ func runCancelOrderExample() {
 }
 
 func main() {
-	fmt.Println("=== 事件驱动工作流示例 ===")
-	fmt.Println("这个示例展示了如何使用事件驱动工作流处理订单流程")
-	fmt.Println("工作流将模拟订单从创建、支付、发货到完成的全过程")
-	fmt.Println("并展示了如何在不同步骤之间等待外部事件")
-	fmt.Println("===========================\n")
+	fmt.Println("Gostra Event Workflow Examples")
+	fmt.Println("============================")
 
-	fmt.Println("=== 运行订单处理工作流示例 ===")
-	runEventWorkflowExample()
+	// Run the suspend-resume example
+	RunSuspendResumeExample()
 
-	fmt.Println("\n\n=== 运行订单取消工作流示例 ===")
-	runCancelOrderExample()
+	fmt.Println("\nAll examples completed successfully")
+	os.Exit(0)
 }

@@ -206,6 +206,66 @@ func (w *EventWorkflow) CreateInstance(inputs map[string]interface{}) string {
 	return instanceID
 }
 
+// StartWorkflow 创建工作流实例并返回实例ID
+func (w *EventWorkflow) StartWorkflow(ctx context.Context, data map[string]interface{}) (string, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	// 验证起始步骤是否存在
+	if _, exists := w.steps[w.startStepID]; !exists {
+		return "", fmt.Errorf("start step '%s' not found", w.startStepID)
+	}
+
+	// 创建唯一ID
+	instanceID := uuid.New().String()
+
+	// 如果没有提供数据，初始化一个空map
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+
+	// 添加工作流基本信息到数据
+	data["workflow"] = map[string]interface{}{
+		"id":   w.id,
+		"name": w.name,
+	}
+
+	// 创建新的实例
+	instance := &workflowInstance{
+		id:         instanceID,
+		workflowID: w.id,
+		data:       data,
+		createdAt:  time.Now(),
+	}
+
+	// 保存实例到内存
+	w.instances[instanceID] = instance
+
+	// 创建初始状态
+	state := &WorkflowState{
+		WorkflowID:    instanceID,
+		WorkflowName:  w.name,
+		Status:        EventStatusPending,
+		StartTime:     time.Now(),
+		LastUpdated:   time.Now(),
+		CurrentStepID: w.startStepID,
+		Results:       make(map[string]interface{}),
+		ResumeData:    nil, // 确保恢复数据字段已初始化
+	}
+
+	// 保存初始状态
+	err := w.stateStore.SaveWorkflowState(state)
+	if err != nil {
+		delete(w.instances, instanceID)
+		return "", fmt.Errorf("failed to save initial workflow state: %w", err)
+	}
+
+	// 异步启动工作流执行
+	go w.startWorkflow(ctx, instanceID)
+
+	return instanceID, nil
+}
+
 // startWorkflow 开始执行工作流
 func (w *EventWorkflow) startWorkflow(ctx context.Context, instanceID string) {
 	// 加载工作流状态
@@ -234,8 +294,19 @@ func (w *EventWorkflow) startWorkflow(ctx context.Context, instanceID string) {
 		return
 	}
 
+	// 确保实例数据中有恢复数据字段
+	if instance.data == nil {
+		instance.data = make(map[string]interface{})
+	}
+
+	// 复制实例数据，以便不修改原始对象
+	dataCopy := make(map[string]interface{})
+	for k, v := range instance.data {
+		dataCopy[k] = v
+	}
+
 	// 执行第一个步骤
-	err = w.executeStep(ctx, instanceID, instance.data, w.startStepID)
+	err = w.executeStep(ctx, instanceID, dataCopy, w.startStepID)
 	if err != nil {
 		w.handleStepError(instanceID, w.startStepID, err)
 	}
@@ -261,6 +332,11 @@ func (w *EventWorkflow) executeStep(ctx context.Context, instanceID string, data
 	state.CurrentStepID = stepID
 	state.LastUpdated = time.Now()
 
+	// 确保数据包含恢复数据
+	if state.ResumeData != nil && data != nil {
+		data["resumeData"] = state.ResumeData
+	}
+
 	err = w.stateStore.SaveWorkflowState(state)
 	if err != nil {
 		return err
@@ -272,7 +348,7 @@ func (w *EventWorkflow) executeStep(ctx context.Context, instanceID string, data
 		return err
 	}
 
-	// 更新结果
+	// 重新加载状态以确保一致性
 	state, err = w.stateStore.LoadWorkflowState(instanceID)
 	if err != nil {
 		return err
@@ -280,6 +356,13 @@ func (w *EventWorkflow) executeStep(ctx context.Context, instanceID string, data
 
 	// 合并结果
 	if result != nil {
+		// 特殊处理resumeData
+		if resumeData, ok := result["resumeData"]; ok {
+			state.ResumeData = resumeData
+			delete(result, "resumeData") // 从普通结果中移除，避免重复
+		}
+
+		// 合并其他结果
 		for k, v := range result {
 			state.Results[k] = v
 		}
@@ -410,10 +493,22 @@ func (w *EventWorkflow) HandleEvent(ctx context.Context, instanceID string, even
 		"type": eventType,
 		"data": eventData,
 	}
+
+	// 如果有恢复数据，也添加到实例数据
+	if state.ResumeData != nil {
+		instance.data["resumeData"] = state.ResumeData
+	}
+
+	// 创建数据副本用于下一步，确保包含resumeData
+	dataCopy := make(map[string]interface{})
+	for k, v := range instance.data {
+		dataCopy[k] = v
+	}
+
 	w.mutex.Unlock()
 
-	// 执行下一步
-	err = w.executeStep(ctx, instanceID, instance.data, nextStepID)
+	// 执行下一步，传递包含恢复数据的新数据
+	err = w.executeStep(ctx, instanceID, dataCopy, nextStepID)
 	if err != nil {
 		w.handleStepError(instanceID, nextStepID, err)
 		return err
@@ -520,65 +615,6 @@ func (s *InMemoryStateStore) DeleteWorkflowState(workflowID string) error {
 
 	delete(s.states, workflowID)
 	return nil
-}
-
-// 创建工作流实例并返回实例ID
-func (w *EventWorkflow) StartWorkflow(ctx context.Context, data map[string]interface{}) (string, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	// 验证起始步骤是否存在
-	if _, exists := w.steps[w.startStepID]; !exists {
-		return "", fmt.Errorf("start step '%s' not found", w.startStepID)
-	}
-
-	// 创建唯一ID
-	instanceID := uuid.New().String()
-
-	// 如果没有提供数据，初始化一个空map
-	if data == nil {
-		data = make(map[string]interface{})
-	}
-
-	// 添加工作流基本信息到数据
-	data["workflow"] = map[string]interface{}{
-		"id":   w.id,
-		"name": w.name,
-	}
-
-	// 创建新的实例
-	instance := &workflowInstance{
-		id:         instanceID,
-		workflowID: w.id,
-		data:       data,
-		createdAt:  time.Now(),
-	}
-
-	// 保存实例到内存
-	w.instances[instanceID] = instance
-
-	// 创建初始状态
-	state := &WorkflowState{
-		WorkflowID:    instanceID,
-		WorkflowName:  w.name,
-		Status:        EventStatusPending,
-		StartTime:     time.Now(),
-		LastUpdated:   time.Now(),
-		CurrentStepID: w.startStepID,
-		Results:       make(map[string]interface{}),
-	}
-
-	// 保存初始状态
-	err := w.stateStore.SaveWorkflowState(state)
-	if err != nil {
-		delete(w.instances, instanceID)
-		return "", fmt.Errorf("failed to save initial workflow state: %w", err)
-	}
-
-	// 异步启动工作流执行
-	go w.startWorkflow(ctx, instanceID)
-
-	return instanceID, nil
 }
 
 // ListInstances 列出所有工作流实例状态

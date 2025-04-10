@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 func TestNewOpenAIVoiceProvider(t *testing.T) {

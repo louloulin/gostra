@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools"
 )
 
 // ParserOptions represents options for the document parser

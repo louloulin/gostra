@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/louloulin/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/tools"
 	"github.com/stretchr/testify/assert"
-	"github.com/yourusername/gostra/pkg/memory"
-	"github.com/yourusername/gostra/pkg/models"
-	"github.com/yourusername/gostra/pkg/tools"
 )
 
 // MockFunctionCallModelProvider 实现了具有函数调用功能的模型提供者

@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/asynkron/protoactor-go/actor"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/models"
 	"github.com/stretchr/testify/assert"
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/models"
 )
 
 // TestModelProvider for testing

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/actor"
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/memory"
-	"github.com/yourusername/gostra/pkg/models/openai"
-	"github.com/yourusername/gostra/pkg/tools"
-	"github.com/yourusername/gostra/pkg/tools/document"
-	"github.com/yourusername/gostra/pkg/tools/search"
+	"github.com/louloulin/gostra/pkg/actor"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/models/openai"
+	"github.com/louloulin/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools/document"
+	"github.com/louloulin/gostra/pkg/tools/search"
 )
 
 // ToolAdapter adapts a tools.Tool to agent.Tool

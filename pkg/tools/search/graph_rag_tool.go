@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools"
 )
 
 // GraphRAGTool Graph RAG工具

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/actor"
+	"github.com/louloulin/gostra/pkg/actor"
 )
 
 // MonitorMiddleware provides monitoring capabilities for actors

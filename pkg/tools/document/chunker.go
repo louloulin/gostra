@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/yourusername/gostra/pkg/tools"
+	"github.com/louloulin/gostra/pkg/tools"
 )
 
 // ChunkStrategy defines the strategy for chunking documents

@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/yourusername/gostra/pkg/memory"
+	"github.com/louloulin/gostra/pkg/memory"
 )
 
 func TestPostgresVectorAdvancedFiltering(t *testing.T) {

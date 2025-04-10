@@ -8,7 +8,7 @@ import (
 	"time"
 
 	proactor "github.com/asynkron/protoactor-go/actor"
-	gostrerrors "github.com/yourusername/gostra/pkg/errors"
+	gostrerrors "github.com/louloulin/gostra/pkg/errors"
 )
 
 // Context represents the execution context for an actor message

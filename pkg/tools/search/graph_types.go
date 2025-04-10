@@ -1,7 +1,7 @@
 package search
 
 import (
-	"github.com/yourusername/gostra/pkg/tools/common"
+	"github.com/louloulin/gostra/pkg/tools/common"
 )
 
 // GraphNode 图节点

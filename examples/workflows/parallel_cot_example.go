@@ -7,11 +7,11 @@ import (
 	"log"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/actor"
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/models"
-	"github.com/yourusername/gostra/pkg/schema"
-	"github.com/yourusername/gostra/pkg/workflow"
+	"github.com/louloulin/gostra/pkg/actor"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/schema"
+	"github.com/louloulin/gostra/pkg/workflow"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/actor"
+	"github.com/louloulin/gostra/pkg/actor"
 )
 
 type mockActor struct {

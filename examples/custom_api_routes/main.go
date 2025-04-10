@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
-	"github.com/yourusername/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg/api"
 )
 
 // Define a custom agent actor for handling weather information

@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yourusername/gostra/pkg/tools/common"
+	"github.com/louloulin/gostra/pkg/tools/common"
 )
 
 // ProcessedDocument represents a processed document

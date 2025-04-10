@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/evals/metrics"
+	"github.com/louloulin/gostra/pkg/evals/metrics"
 )
 
 // EvalResult represents the result of a single evaluation run

@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/yourusername/gostra/pkg"
-	"github.com/yourusername/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg"
+	"github.com/louloulin/gostra/pkg/api"
 )
 
 func main() {

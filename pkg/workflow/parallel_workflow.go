@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/agent"
-	"github.com/yourusername/gostra/pkg/models"
+	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/models"
 )
 
 // ParallelStep represents a step in a parallel workflow

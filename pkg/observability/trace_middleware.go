@@ -4,7 +4,7 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/yourusername/gostra/pkg/actor"
+	"github.com/louloulin/gostra/pkg/actor"
 )
 
 // TraceMiddleware provides tracing capabilities for actors

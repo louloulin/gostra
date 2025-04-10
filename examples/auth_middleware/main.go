@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/yourusername/gostra/pkg/api"
-	"github.com/yourusername/gostra/pkg/auth/middleware"
+	"github.com/louloulin/gostra/pkg/api"
+	"github.com/louloulin/gostra/pkg/auth/middleware"
 )
 
 func main() {
