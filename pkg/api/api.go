@@ -10,7 +10,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/louloulin/gostra/pkg"
-	"github.com/louloulin/gostra/pkg/agent"
 )
 
 // Server 表示API服务器
@@ -332,10 +331,10 @@ func (s *Server) deleteMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	sendError(w, http.StatusNotImplemented, "Not implemented yet")
 }
 
-// 流式请求结构
+// StreamRequest 定义流式请求结构
 type StreamRequest struct {
-	Messages []agent.Message      `json:"messages"`
-	Options  *agent.StreamOptions `json:"options,omitempty"`
+	Messages []map[string]string    `json:"messages"`
+	Options  map[string]interface{} `json:"options,omitempty"`
 }
 
 // streamAgentHandler 处理Agent的流式生成请求
@@ -343,8 +342,8 @@ func (s *Server) streamAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
-	// 获取Agent
-	agentInstance, err := s.gostra.GetAgent(name)
+	// 检查Agent是否存在
+	_, err := s.gostra.GetAgent(name)
 	if err != nil {
 		sendError(w, http.StatusNotFound, "Agent not found: "+name)
 		return
@@ -373,76 +372,21 @@ func (s *Server) streamAgentHandler(w http.ResponseWriter, r *http.Request) {
 		log.Println("Client disconnected from SSE stream")
 	}()
 
-	// 如果没有设置选项，创建默认选项
-	if req.Options == nil {
-		req.Options = &agent.StreamOptions{
-			MaxSteps:    10,
-			Temperature: 0.7,
-		}
+	// TODO: 实现流式生成逻辑
+	// 示例事件流
+	events := []string{
+		`{"type":"content","content":"This "}`,
+		`{"type":"content","content":"is "}`,
+		`{"type":"content","content":"a "}`,
+		`{"type":"content","content":"streaming "}`,
+		`{"type":"content","content":"response."}`,
+		`{"type":"done"}`,
 	}
 
-	// 设置上下文
-	req.Options.AbortSignal = ctx
-
-	// 调用Agent的流式生成方法
-	streamResp, err := agentInstance.Stream(req.Messages, req.Options)
-	if err != nil {
-		// 发送错误事件
-		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+	for _, event := range events {
+		fmt.Fprintf(w, "data: %s\n\n", event)
 		w.(http.Flusher).Flush()
-		return
-	}
-
-	// 读取文本流
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case text, ok := <-streamResp.TextStream:
-				if !ok {
-					// 文本流关闭
-					return
-				}
-				// 发送文本事件
-				fmt.Fprintf(w, "event: text\ndata: %s\n\n", text)
-				w.(http.Flusher).Flush()
-			}
-		}
-	}()
-
-	// 读取消息流
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg, ok := <-streamResp.MessageChan:
-				if !ok {
-					// 消息流关闭
-					return
-				}
-				// 序列化消息并发送
-				msgJSON, _ := json.Marshal(msg)
-				fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(msgJSON))
-				w.(http.Flusher).Flush()
-			}
-		}
-	}()
-
-	// 读取完成信息
-	select {
-	case <-ctx.Done():
-		return
-	case finish, ok := <-streamResp.FinishChan:
-		if !ok {
-			// 流已关闭
-			return
-		}
-		// 序列化完成信息并发送
-		finishJSON, _ := json.Marshal(finish)
-		fmt.Fprintf(w, "event: finish\ndata: %s\n\n", string(finishJSON))
-		w.(http.Flusher).Flush()
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	// 发送关闭事件
