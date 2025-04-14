@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
 
@@ -14,29 +15,31 @@ import (
 	"github.com/louloulin/gostra/pkg/tools/search"
 )
 
-// 计算余弦相似度
-func cosineSimFloat32(vec1, vec2 []float32) float32 {
-	if len(vec1) != len(vec2) {
-		return 0
+// calculateCosineSimilarityFloat32 calculates the cosine similarity between two float32 vectors
+func calculateCosineSimilarityFloat32(a, b []float32) float32 {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0.0
 	}
 
-	var dotProduct, norm1, norm2 float32
-	for i := 0; i < len(vec1); i++ {
-		dotProduct += vec1[i] * vec2[i]
-		norm1 += vec1[i] * vec1[i]
-		norm2 += vec2[i] * vec2[i]
+	dotProduct := float32(0.0)
+	normA := float32(0.0)
+	normB := float32(0.0)
+
+	for i := 0; i < len(a); i++ {
+		dotProduct += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
 	}
 
-	if norm1 == 0 || norm2 == 0 {
-		return 0
+	if normA == 0 || normB == 0 {
+		return 0.0
 	}
 
-	return dotProduct / (float32(sqrt(float64(norm1))) * float32(sqrt(float64(norm2))))
-}
+	// Use math.Sqrt from the standard library
+	normASqrt := float32(math.Sqrt(float64(normA)))
+	normBSqrt := float32(math.Sqrt(float64(normB)))
 
-// 计算平方根
-func sqrt(x float64) float64 {
-	return float64(x)
+	return dotProduct / (normASqrt * normBSqrt)
 }
 
 func main() {
@@ -116,8 +119,8 @@ func main() {
 			if err != nil {
 				return 0, err
 			}
-			// Ensure the return type is float32
-			return float32(cosineSimFloat32(emb1, emb2)), nil
+			// Call the local renamed float32 cosine similarity function
+			return calculateCosineSimilarityFloat32(emb1, emb2), nil
 		},
 	})
 
