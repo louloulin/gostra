@@ -15,6 +15,45 @@ import (
 	"github.com/louloulin/gostra/pkg/tools/search"
 )
 
+// EmbeddingAdapter 适配内存包的OpenAIEmbeddingProvider到search包的EmbeddingProvider接口
+type EmbeddingAdapter struct {
+	provider *memory.OpenAIEmbeddingProvider
+	ctx      context.Context
+}
+
+// NewEmbeddingAdapter 创建新的嵌入适配器
+func NewEmbeddingAdapter(provider *memory.OpenAIEmbeddingProvider, ctx context.Context) *EmbeddingAdapter {
+	return &EmbeddingAdapter{
+		provider: provider,
+		ctx:      ctx,
+	}
+}
+
+// GetEmbedding 适配单个嵌入方法
+func (a *EmbeddingAdapter) GetEmbedding(text string) ([]float32, error) {
+	embedding, err := a.provider.GetEmbedding(a.ctx, text)
+	if err != nil {
+		return nil, err
+	}
+	// memory.Embedding 本身就是 []float32 类型，直接返回
+	return embedding, nil
+}
+
+// GetEmbeddings 适配批量嵌入方法
+func (a *EmbeddingAdapter) GetEmbeddings(texts []string) ([][]float32, error) {
+	embeddings, err := a.provider.GetEmbeddings(a.ctx, texts)
+	if err != nil {
+		return nil, err
+	}
+
+	// 将[]memory.Embedding转换为[][]float32（实际上类型相同，只是类型别名）
+	result := make([][]float32, len(embeddings))
+	for i, emb := range embeddings {
+		result[i] = emb
+	}
+	return result, nil
+}
+
 func main() {
 	// 获取环境变量
 	openaiKey := os.Getenv("OPENAI_API_KEY")
@@ -51,6 +90,9 @@ func main() {
 		log.Fatalf("Failed to create embedding provider: %v", err)
 	}
 
+	// 创建嵌入适配器
+	embeddingAdapter := NewEmbeddingAdapter(embeddingProvider, ctx)
+
 	// 创建PostgreSQL向量存储
 	pgVectorStore, err := memory.NewPostgresVectorStorage(memory.PostgresVectorOptions{
 		ConnectionString: pgConnStr,
@@ -73,7 +115,7 @@ func main() {
 
 	// 创建向量搜索工具
 	vectorSearchTool := search.NewVectorSearchTool(search.VectorSearchOptions{
-		EmbeddingProvider: embeddingProvider,
+		EmbeddingProvider: embeddingAdapter,
 		Dimension:         1536,
 		DistanceMetric:    "cosine",
 	})
@@ -82,14 +124,14 @@ func main() {
 	documentSearchTool := search.NewDocumentSearchTool(search.DocumentSearchOptions{
 		VectorSearchTool:  vectorSearchTool,
 		DocumentChunker:   documentChunker,
-		EmbeddingProvider: embeddingProvider,
+		EmbeddingProvider: embeddingAdapter,
 		ChunkSize:         1000,
 		ChunkOverlap:      200,
 		ChunkStrategy:     document.StrategyRecursive,
 	})
 
-	// 设置工具函数，将文档存储到PostgreSQL
-	storeDocumentFunction := func(chunks []*document.DocumentChunk) error {
+	// 创建文档存储函数，将文档存储到PostgreSQL
+	storeDocumentsToPostgres := func(chunks []*document.DocumentChunk) error {
 		// 提取文本内容，用于生成嵌入向量
 		texts := make([]string, len(chunks))
 		for i, chunk := range chunks {
@@ -97,7 +139,7 @@ func main() {
 		}
 
 		// 获取嵌入向量
-		embeddings, err := embeddingProvider.GetEmbeddings(texts)
+		embeddings, err := embeddingProvider.GetEmbeddings(ctx, texts)
 		if err != nil {
 			return fmt.Errorf("获取嵌入向量失败: %w", err)
 		}
@@ -231,7 +273,7 @@ func main() {
 - 贝叶斯优化`
 
 	// 添加示例文档
-	err = documentSearchTool.AddDocument(sampleDocument, "ml-basics", map[string]interface{}{
+	documentMetadata := map[string]interface{}{
 		"title":      "机器学习基础概念",
 		"category":   "机器学习",
 		"author":     "AI助手",
@@ -256,9 +298,37 @@ func main() {
 				"difficulty": "高级",
 			},
 		},
+	}
+
+	// 首先使用Chunker分块文档
+	chunkerParams := map[string]interface{}{
+		"content":  sampleDocument,
+		"strategy": string(document.StrategyRecursive),
+		"size":     float64(1000),
+		"overlap":  float64(200),
+	}
+
+	chunkerResult, err := documentChunker.Execute(chunkerParams, &tools.ExecuteOptions{
+		Context: ctx,
 	})
 	if err != nil {
-		log.Fatalf("Failed to add document: %v", err)
+		log.Fatalf("Failed to chunk document: %v", err)
+	}
+
+	chunks, ok := chunkerResult.([]*document.DocumentChunk)
+	if !ok {
+		log.Fatalf("Invalid chunk result type")
+	}
+
+	// 为每个分块设置文档ID和元数据
+	for _, chunk := range chunks {
+		chunk.DocumentID = "ml-basics"
+		chunk.Metadata = documentMetadata
+	}
+
+	// 使用storeDocumentsToPostgres存储分块
+	if err := storeDocumentsToPostgres(chunks); err != nil {
+		log.Fatalf("Failed to store document chunks: %v", err)
 	}
 
 	// 演示基本查询
@@ -279,56 +349,69 @@ func main() {
 	fmt.Println("===== 基本查询示例 =====")
 	for _, query := range demoQueries {
 		fmt.Printf("\n问题: %s\n", query)
-		result, err := ragAgent.GenerateResponse(ctx, query, nil)
+		// 使用Run方法代替GenerateResponse
+		response, err := ragAgent.Run(ctx, &agent.RunOptions{
+			Input: query,
+		})
 		if err != nil {
 			log.Printf("Error: %v", err)
 			continue
 		}
-		fmt.Printf("回答: %s\n", result)
+		fmt.Printf("回答: %s\n", response)
 	}
 
 	fmt.Println("\n\n===== 元数据过滤查询示例 =====")
-	for _, query := range metadataQueries {
+	for i, query := range metadataQueries {
 		fmt.Printf("\n问题: %s\n", query)
 
-		var result string
-		if query == metadataQueries[0] {
+		var filters map[string]interface{}
+		if i == 0 {
 			// 示例1：使用正则表达式过滤
-			result, err = executeFilteredQuery(ctx, ragAgent, "学习", map[string]interface{}{
+			filters = map[string]interface{}{
 				"title": map[string]interface{}{
 					"$regex": "学习",
 				},
-			})
-		} else if query == metadataQueries[1] {
+			}
+		} else if i == 1 {
 			// 示例2：嵌套元数据过滤
-			result, err = executeFilteredQuery(ctx, ragAgent, "难度级别为高级的学习方法", map[string]interface{}{
+			filters = map[string]interface{}{
 				"sections.*.difficulty": "高级",
-			})
-		} else if query == metadataQueries[2] {
+			}
+		} else if i == 2 {
 			// 示例3：数组内容过滤
-			result, err = executeFilteredQuery(ctx, ragAgent, "监督学习算法", map[string]interface{}{
+			filters = map[string]interface{}{
 				"sections.监督学习.algorithms": map[string]interface{}{
 					"$in": []string{"线性回归", "逻辑回归"},
 				},
-			})
+			}
 		}
+
+		// 使用文档搜索工具直接执行查询
+		result, err := documentSearchTool.Execute(map[string]interface{}{
+			"query":   query,
+			"filters": filters,
+			"limit":   float64(5),
+		}, &tools.ExecuteOptions{
+			Context: ctx,
+		})
 
 		if err != nil {
 			log.Printf("Error: %v", err)
 			continue
 		}
-		fmt.Printf("回答: %s\n", result)
-	}
-}
 
-// 执行带过滤的查询
-func executeFilteredQuery(ctx context.Context, agent *agent.Agent, query string, filters map[string]interface{}) (string, error) {
-	// 构建带有过滤器的查询
-	params := map[string]interface{}{
-		"query":   query,
-		"filters": filters,
+		// 处理搜索结果
+		if searchResults, ok := result.([]*search.VectorSearchResult); ok {
+			fmt.Printf("找到 %d 个相关文档\n", len(searchResults))
+			for i, r := range searchResults {
+				fmt.Printf("%d. 文档ID: %s, 相似度: %.4f\n", i+1, r.Chunk.DocumentID, r.Score)
+				fmt.Printf("   内容: %s\n", r.Chunk.Content)
+			}
+		} else {
+			fmt.Println("未找到相关内容")
+		}
 	}
 
-	// 在Agent中执行查询
-	return agent.ExecuteWithParams(ctx, "document_search", params)
+	// 打印成功信息
+	fmt.Println("\n演示完成 - PostgreSQL RAG示例")
 }
