@@ -257,6 +257,9 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 	}
 
 	var finalResponse string
+	var steps []Step
+	toolCallCount := 0
+	var lastAssistantResponseText string // Store the last assistant response text
 
 	// 思考循环
 	for callCount := 0; callCount < maxConsecutiveCalls; callCount++ {
@@ -275,42 +278,55 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 			// ToolChoice: "auto",
 		}
 
-		// 调用模型生成响应
-		response, err := a.ModelProvider.Generate(ctx, messages, genOpts)
+		// 调用模型生成响应 (Using GenerateWithFunctionCalls)
+		response, err := a.ModelProvider.GenerateWithFunctionCalls(ctx, messages, genOpts)
 		if err != nil {
 			a.StateManager.SetError(fmt.Sprintf("model generation failed: %v", err))
 			return "", fmt.Errorf("model generation failed: %w", err)
 		}
 
-		// 检查是否有工具调用
-		toolCalls, hasToolCalls := a.parseToolCalls(response)
-		if !hasToolCalls {
-			// 如果没有工具调用，保存最终响应并返回
-			if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response, nil); err != nil {
+		lastAssistantResponseText = response.Text // Capture the latest response text from the struct
+
+		// 检查是否有工具调用 (Check FinishReason and ToolCalls from struct)
+		hasToolCalls := len(response.ToolCalls) > 0
+		isFinished := response.FinishReason != "tool_calls" && response.FinishReason != "function_call"
+
+		if !hasToolCalls && isFinished {
+			// 如果没有工具调用且模型完成，保存最终响应并返回
+			if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response.Text, nil); err != nil {
 				a.StateManager.SetError(fmt.Sprintf("failed to add assistant message: %v", err))
 				return "", fmt.Errorf("failed to add assistant message: %w", err)
 			}
-
-			finalResponse = response
-			break
+			finalResponse = response.Text
+			break // Exit loop, normal finish
 		}
 
-		// 有工具调用，保存助手消息
+		// 有工具调用或模型未完成，保存助手消息
 		assistantMetadata := map[string]interface{}{
-			"has_tool_calls": true,
-			"tool_calls":     toolCalls,
+			"has_tool_calls": hasToolCalls,
+			"tool_calls":     response.ToolCalls,
+			"finish_reason":  response.FinishReason,
 		}
-
-		if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response, assistantMetadata); err != nil {
+		if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response.Text, assistantMetadata); err != nil {
 			a.StateManager.SetError(fmt.Sprintf("failed to add assistant message with tool calls: %v", err))
 			return "", fmt.Errorf("failed to add assistant message with tool calls: %w", err)
 		}
 
+		// 如果没有工具调用但模型要求继续 (e.g., maybe length limit), continue loop
+		if !hasToolCalls {
+			continue
+		}
+
 		// 执行工具调用
-		for _, toolCall := range toolCalls {
+		// Declare slices to hold results for this step
+		toolResultsData := make([]interface{}, len(response.ToolCalls))
+		toolResultsMsgs := make([]models.Message, 0, len(response.ToolCalls))
+
+		for i, toolCall := range response.ToolCalls { // Use ToolCalls from struct
 			toolID := toolCall.ID
 			toolName := toolCall.Function.Name
 			argsStr := toolCall.Function.Arguments
+			toolCallCount++
 
 			// 记录当前工具调用
 			a.StateManager.SetData("current_tool", toolName)
@@ -319,32 +335,40 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 			var args map[string]interface{}
 			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
 				log.Printf("Failed to parse tool arguments: %v", err)
-				toolResult := fmt.Sprintf("Error: Failed to parse tool arguments - %v", err)
-
-				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResult, map[string]interface{}{
+				toolResultStr := fmt.Sprintf("Error: Failed to parse tool arguments - %v", err)
+				toolResultsData[i] = toolResultStr // Store error string in data slice
+				toolResultsMsgs = append(toolResultsMsgs, models.Message{
+					Role:    "tool",
+					Content: toolResultStr,
+					Name:    toolID,
+				})
+				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResultStr, map[string]interface{}{
 					"tool_call_id": toolID,
 					"tool_name":    toolName,
 				}); err != nil {
 					a.StateManager.SetError(fmt.Sprintf("failed to add tool error message: %v", err))
 					return "", fmt.Errorf("failed to add tool error message: %w", err)
 				}
-
 				continue
 			}
 
 			// 查找工具
 			tool := a.findTool(availableTools, toolName)
 			if tool == nil {
-				toolResult := fmt.Sprintf("Error: Tool not found - %s", toolName)
-
-				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResult, map[string]interface{}{
+				toolResultStr := fmt.Sprintf("Error: Tool not found - %s", toolName)
+				toolResultsData[i] = toolResultStr // Store error string in data slice
+				toolResultsMsgs = append(toolResultsMsgs, models.Message{
+					Role:    "tool",
+					Content: toolResultStr,
+					Name:    toolID,
+				})
+				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResultStr, map[string]interface{}{
 					"tool_call_id": toolID,
 					"tool_name":    toolName,
 				}); err != nil {
 					a.StateManager.SetError(fmt.Sprintf("failed to add tool error message: %v", err))
 					return "", fmt.Errorf("failed to add tool error message: %w", err)
 				}
-
 				continue
 			}
 
@@ -353,10 +377,11 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 				ThreadID: opts.ThreadID,
 				CallID:   toolID,
 			}
-
 			a.StateManager.SetData("tool_execution_started", time.Now())
 			result, err := tool.Execute(args, execOpts)
 			a.StateManager.DeleteData("tool_execution_started") // 清除开始执行时间
+
+			toolResultsData[i] = result // Store raw result
 
 			var resultStr string
 			if err != nil {
@@ -368,9 +393,9 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 				case string:
 					resultStr = r
 				default:
-					resultBytes, err := json.Marshal(result)
-					if err != nil {
-						resultStr = fmt.Sprintf("%v", result)
+					resultBytes, marshalErr := json.Marshal(result)
+					if marshalErr != nil {
+						resultStr = fmt.Sprintf("%+v", result)
 					} else {
 						resultStr = string(resultBytes)
 					}
@@ -378,7 +403,11 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 				a.StateManager.SetData("last_tool_result", resultStr)
 			}
 
-			// 保存工具结果
+			toolResultsMsgs = append(toolResultsMsgs, models.Message{
+				Role:    "tool",
+				Content: resultStr,
+				Name:    toolID,
+			})
 			if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", resultStr, map[string]interface{}{
 				"tool_call_id": toolID,
 				"tool_name":    toolName,
@@ -386,10 +415,38 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 				a.StateManager.SetError(fmt.Sprintf("failed to add tool result message: %v", err))
 				return "", fmt.Errorf("failed to add tool result message: %w", err)
 			}
-
-			// 清除当前工具
 			a.StateManager.DeleteData("current_tool")
+		} // End tool execution loop
+
+		// Prepare data for step and step callback
+		localToolCalls := make([]ToolCall, len(response.ToolCalls))
+		for idx, tc := range response.ToolCalls {
+			localToolCalls[idx] = ToolCall{
+				ID:        tc.ID,
+				ToolID:    tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			}
 		}
+
+		currentStep := Step{
+			Text:        response.Text,   // The raw string response from the model for this step
+			ToolCalls:   localToolCalls,  // Use converted local type
+			ToolResults: toolResultsData, // Use the collected raw results/errors
+		}
+		steps = append(steps, currentStep)
+
+		// Check if max consecutive calls reached *after* processing tool calls for this iteration
+		if callCount == maxConsecutiveCalls-1 {
+			log.Printf("Reached maximum function call attempts: %d", maxConsecutiveCalls)
+			// Loop will terminate, finalResponse might still be empty
+			break
+		}
+	}
+
+	// If loop finished without a final response text (e.g., hit max calls),
+	// return the last assistant response text we captured.
+	if finalResponse == "" {
+		finalResponse = lastAssistantResponseText
 	}
 
 	// 任务完成，更新状态
@@ -1281,11 +1338,11 @@ func (a *Agent) StreamWithFunctionCalls(ctx context.Context, prompt string) (<-c
 
 // StepFinishData 包含步骤完成时的数据
 type StepFinishData struct {
-	Text        string            `json:"text"`
-	ToolCalls   []models.ToolCall `json:"tool_calls,omitempty"`
-	ToolResults []interface{}     `json:"tool_results,omitempty"`
-	StepIndex   int               `json:"step_index"`
-	TotalSteps  int               `json:"total_steps"`
+	Text        string        `json:"text"`
+	ToolCalls   []ToolCall    `json:"tool_calls,omitempty"`
+	ToolResults []interface{} `json:"tool_results,omitempty"`
+	StepIndex   int           `json:"step_index"`
+	TotalSteps  int           `json:"total_steps"`
 }
 
 // FinishData 包含执行完成时的数据
@@ -1372,6 +1429,7 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 	var finalResponse string
 	var steps []Step
 	toolCallCount := 0
+	var lastAssistantResponseText string // Store the last assistant response text
 
 	// 思考循环
 	for callCount := 0; callCount < maxConsecutiveCalls; callCount++ {
@@ -1390,59 +1448,51 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 			// ToolChoice: "auto",
 		}
 
-		// 调用模型生成响应
-		response, err := a.ModelProvider.Generate(ctx, messages, genOpts)
+		// 调用模型生成响应 (Using GenerateWithFunctionCalls)
+		response, err := a.ModelProvider.GenerateWithFunctionCalls(ctx, messages, genOpts)
 		if err != nil {
 			a.StateManager.SetError(fmt.Sprintf("model generation failed: %v", err))
 			return "", fmt.Errorf("model generation failed: %w", err)
 		}
 
-		// 创建当前步骤
-		currentStep := Step{
-			Text: response,
-		}
+		lastAssistantResponseText = response.Text // Capture the latest response text from the struct
 
-		// 检查是否有工具调用
-		toolCalls, hasToolCalls := a.parseToolCalls(response)
-		if !hasToolCalls {
-			// 如果没有工具调用，保存最终响应并返回
-			if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response, nil); err != nil {
+		// 检查是否有工具调用 (Check FinishReason and ToolCalls from struct)
+		hasToolCalls := len(response.ToolCalls) > 0
+		isFinished := response.FinishReason != "tool_calls" && response.FinishReason != "function_call"
+
+		if !hasToolCalls && isFinished {
+			// 如果没有工具调用且模型完成，保存最终响应并返回
+			if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response.Text, nil); err != nil {
 				a.StateManager.SetError(fmt.Sprintf("failed to add assistant message: %v", err))
 				return "", fmt.Errorf("failed to add assistant message: %w", err)
 			}
-
-			finalResponse = response
-			steps = append(steps, currentStep)
-
-			// 调用步骤完成回调
-			if onStepFinish != nil {
-				stepData := &StepFinishData{
-					Text:       response,
-					StepIndex:  callCount,
-					TotalSteps: callCount + 1,
-				}
-				onStepFinish(stepData)
-			}
-
-			break
+			finalResponse = response.Text
+			break // Exit loop, normal finish
 		}
 
-		// 有工具调用，保存助手消息
+		// 有工具调用或模型未完成，保存助手消息
 		assistantMetadata := map[string]interface{}{
-			"has_tool_calls": true,
-			"tool_calls":     toolCalls,
+			"has_tool_calls": hasToolCalls,
+			"tool_calls":     response.ToolCalls,
+			"finish_reason":  response.FinishReason,
 		}
-
-		if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response, assistantMetadata); err != nil {
+		if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "assistant", response.Text, assistantMetadata); err != nil {
 			a.StateManager.SetError(fmt.Sprintf("failed to add assistant message with tool calls: %v", err))
 			return "", fmt.Errorf("failed to add assistant message with tool calls: %w", err)
 		}
 
-		currentStep.ToolCalls = make([]ToolCall, len(toolCalls))
-		toolResults := make([]interface{}, len(toolCalls))
+		// 如果没有工具调用但模型要求继续 (e.g., maybe length limit), continue loop
+		if !hasToolCalls {
+			continue
+		}
 
 		// 执行工具调用
-		for i, toolCall := range toolCalls {
+		// Declare slices to hold results for this step
+		toolResultsData := make([]interface{}, len(response.ToolCalls))
+		toolResultsMsgs := make([]models.Message, 0, len(response.ToolCalls))
+
+		for i, toolCall := range response.ToolCalls { // Use ToolCalls from struct
 			toolID := toolCall.ID
 			toolName := toolCall.Function.Name
 			argsStr := toolCall.Function.Arguments
@@ -1451,45 +1501,44 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 			// 记录当前工具调用
 			a.StateManager.SetData("current_tool", toolName)
 
-			// 转换到ToolCall格式
-			currentStep.ToolCalls[i] = ToolCall{
-				ID:        toolID,
-				ToolID:    toolName,
-				Arguments: argsStr,
-			}
-
 			// 解析参数
 			var args map[string]interface{}
 			if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
 				log.Printf("Failed to parse tool arguments: %v", err)
-				toolResult := fmt.Sprintf("Error: Failed to parse tool arguments - %v", err)
-				toolResults[i] = toolResult
-
-				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResult, map[string]interface{}{
+				toolResultStr := fmt.Sprintf("Error: Failed to parse tool arguments - %v", err)
+				toolResultsData[i] = toolResultStr // Store error string in data slice
+				toolResultsMsgs = append(toolResultsMsgs, models.Message{
+					Role:    "tool",
+					Content: toolResultStr,
+					Name:    toolID,
+				})
+				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResultStr, map[string]interface{}{
 					"tool_call_id": toolID,
 					"tool_name":    toolName,
 				}); err != nil {
 					a.StateManager.SetError(fmt.Sprintf("failed to add tool error message: %v", err))
 					return "", fmt.Errorf("failed to add tool error message: %w", err)
 				}
-
 				continue
 			}
 
 			// 查找工具
 			tool := a.findTool(availableTools, toolName)
 			if tool == nil {
-				toolResult := fmt.Sprintf("Error: Tool not found - %s", toolName)
-				toolResults[i] = toolResult
-
-				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResult, map[string]interface{}{
+				toolResultStr := fmt.Sprintf("Error: Tool not found - %s", toolName)
+				toolResultsData[i] = toolResultStr // Store error string in data slice
+				toolResultsMsgs = append(toolResultsMsgs, models.Message{
+					Role:    "tool",
+					Content: toolResultStr,
+					Name:    toolID,
+				})
+				if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", toolResultStr, map[string]interface{}{
 					"tool_call_id": toolID,
 					"tool_name":    toolName,
 				}); err != nil {
 					a.StateManager.SetError(fmt.Sprintf("failed to add tool error message: %v", err))
 					return "", fmt.Errorf("failed to add tool error message: %w", err)
 				}
-
 				continue
 			}
 
@@ -1498,13 +1547,11 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 				ThreadID: opts.ThreadID,
 				CallID:   toolID,
 			}
-
 			a.StateManager.SetData("tool_execution_started", time.Now())
 			result, err := tool.Execute(args, execOpts)
 			a.StateManager.DeleteData("tool_execution_started") // 清除开始执行时间
 
-			// 保存结果
-			toolResults[i] = result
+			toolResultsData[i] = result // Store raw result
 
 			var resultStr string
 			if err != nil {
@@ -1516,9 +1563,9 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 				case string:
 					resultStr = r
 				default:
-					resultBytes, err := json.Marshal(result)
-					if err != nil {
-						resultStr = fmt.Sprintf("%v", result)
+					resultBytes, marshalErr := json.Marshal(result)
+					if marshalErr != nil {
+						resultStr = fmt.Sprintf("%+v", result)
 					} else {
 						resultStr = string(resultBytes)
 					}
@@ -1526,7 +1573,11 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 				a.StateManager.SetData("last_tool_result", resultStr)
 			}
 
-			// 保存工具结果
+			toolResultsMsgs = append(toolResultsMsgs, models.Message{
+				Role:    "tool",
+				Content: resultStr,
+				Name:    toolID,
+			})
 			if _, err := a.MemoryProvider.AddMessage(ctx, opts.ThreadID, "tool", resultStr, map[string]interface{}{
 				"tool_call_id": toolID,
 				"tool_name":    toolName,
@@ -1534,26 +1585,49 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 				a.StateManager.SetError(fmt.Sprintf("failed to add tool result message: %v", err))
 				return "", fmt.Errorf("failed to add tool result message: %w", err)
 			}
-
-			// 清除当前工具
 			a.StateManager.DeleteData("current_tool")
+		} // End tool execution loop
+
+		// Prepare data for step and step callback
+		localToolCalls := make([]ToolCall, len(response.ToolCalls))
+		for idx, tc := range response.ToolCalls {
+			localToolCalls[idx] = ToolCall{
+				ID:        tc.ID,
+				ToolID:    tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			}
 		}
 
-		// 保存工具结果到步骤
-		currentStep.ToolResults = toolResults
+		currentStep := Step{
+			Text:        response.Text,   // The raw string response from the model for this step
+			ToolCalls:   localToolCalls,  // Use converted local type
+			ToolResults: toolResultsData, // Use the collected raw results/errors
+		}
 		steps = append(steps, currentStep)
 
-		// 调用步骤完成回调
 		if onStepFinish != nil {
 			stepData := &StepFinishData{
-				Text:        response,
-				ToolCalls:   toolCalls,
-				ToolResults: toolResults,
+				Text:        response.Text,   // Pass the raw string response
+				ToolCalls:   localToolCalls,  // Pass the converted local type
+				ToolResults: toolResultsData, // Pass the collected raw results/errors from this step
 				StepIndex:   callCount,
-				TotalSteps:  maxConsecutiveCalls,
+				TotalSteps:  -1,
 			}
 			onStepFinish(stepData)
 		}
+
+		// Check if max consecutive calls reached
+		if callCount == maxConsecutiveCalls-1 {
+			log.Printf("Reached maximum function call attempts: %d", maxConsecutiveCalls)
+			// Loop will terminate, finalResponse might still be empty
+			break
+		}
+	}
+
+	// If loop finished without a final response text (e.g., hit max calls),
+	// return the last assistant response text we captured.
+	if finalResponse == "" {
+		finalResponse = lastAssistantResponseText
 	}
 
 	// 任务完成，更新状态

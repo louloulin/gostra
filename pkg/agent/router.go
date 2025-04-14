@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -90,32 +89,39 @@ type AgentResponse struct {
 // handleTransmitRequest processes a transmit request and determines routing
 func (r *RouterAgent) handleTransmitRequest(ctx actor.Context, req *TransmitRequest) {
 	var response TransmitResponse
-	response.Context = req.Context
-	if response.Context == nil {
-		response.Context = make(map[string]interface{})
+	var finalContext map[string]interface{} // Variable to store the final context
+	var results []AgentResponse
+	var err error
+
+	initialContext := req.Context
+	if initialContext == nil {
+		initialContext = make(map[string]interface{})
 	}
 
 	// If specific agents are provided, route to them
 	if len(req.Agents) > 0 {
 		if req.ParallelCall {
-			results, err := r.callAgentsInParallel(ctx, req)
+			results, finalContext, err = r.callAgentsInParallel(ctx, req)
 			if err != nil {
 				response.Error = err.Error()
+				response.Context = initialContext // Return initial context on error
 				ctx.Respond(&response)
 				return
 			}
 			response.Results = results
 		} else {
 			// Call agents sequentially
-			results, err := r.callAgentsSequentially(ctx, req)
+			results, finalContext, err = r.callAgentsSequentially(ctx, req)
 			if err != nil {
 				response.Error = err.Error()
+				response.Context = initialContext // Return initial context on error
 				ctx.Respond(&response)
 				return
 			}
 			response.Results = results
 		}
 
+		response.Context = finalContext // Assign the final merged context
 		ctx.Respond(&response)
 		return
 	}
@@ -124,20 +130,23 @@ func (r *RouterAgent) handleTransmitRequest(ctx actor.Context, req *TransmitRequ
 	agents, err := r.determineRoutingWithLLM(ctx, req)
 	if err != nil {
 		response.Error = fmt.Sprintf("LLM routing error: %v", err)
+		response.Context = initialContext // Return initial context on error
 		ctx.Respond(&response)
 		return
 	}
 
-	// Call the determined agents
+	// Call the determined agents sequentially (default for LLM routing)
 	req.Agents = agents
-	results, err := r.callAgentsSequentially(ctx, req)
+	results, finalContext, err = r.callAgentsSequentially(ctx, req)
 	if err != nil {
 		response.Error = err.Error()
+		response.Context = initialContext // Return initial context on error
 		ctx.Respond(&response)
 		return
 	}
 
 	response.Results = results
+	response.Context = finalContext // Assign the final merged context
 
 	// Suggest next agents that might be relevant
 	nextAgents, err := r.suggestNextAgents(ctx, req, results)
@@ -206,20 +215,52 @@ Return only the name(s) of the agent(s) that should handle this request in JSON 
 	return result.Agents, nil
 }
 
+// mergeMaps performs a deep merge of two maps. Keys in src will overwrite keys in dst.
+// Nested maps are also merged recursively.
+// Special handling for 'conversation_trace' to append slices.
+func mergeMaps(dst, src map[string]interface{}) map[string]interface{} {
+	if dst == nil {
+		dst = make(map[string]interface{})
+	}
+	for key, srcVal := range src {
+		if dstVal, ok := dst[key]; ok {
+			// Special case for conversation_trace: append slices
+			if key == "conversation_trace" {
+				dstSlice, dstOk := dstVal.([]string)
+				srcSlice, srcOk := srcVal.([]string)
+				if dstOk && srcOk {
+					// Append src to dst, could add duplicate check if needed
+					dst[key] = append(dstSlice, srcSlice...)
+					continue // Skip default handling
+				}
+			}
+
+			srcMap, srcIsMap := srcVal.(map[string]interface{})
+			dstMap, dstIsMap := dstVal.(map[string]interface{})
+			if srcIsMap && dstIsMap {
+				// Recursively merge nested maps
+				dst[key] = mergeMaps(dstMap, srcMap)
+			} else {
+				// Overwrite if types don't match or not maps
+				dst[key] = srcVal
+			}
+		} else {
+			// Add new key
+			dst[key] = srcVal
+		}
+	}
+	return dst
+}
+
 // callAgentsInParallel calls multiple agents in parallel and collects their responses
-func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitRequest) ([]AgentResponse, error) {
+// Returns results, the final merged context, and any error.
+func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitRequest) ([]AgentResponse, map[string]interface{}, error) {
 	var wg sync.WaitGroup
 	results := make([]AgentResponse, len(req.Agents))
 	errors := make([]error, len(req.Agents))
+	resultLock := sync.Mutex{}
 
 	// Create a shared context map (thread-safe map for parallel updates)
-	type contextUpdate struct {
-		agentName string
-		data      map[string]interface{}
-	}
-	contextChan := make(chan contextUpdate, len(req.Agents))
-
-	// Add a conversation trace if not present
 	updatedContext := make(map[string]interface{})
 	if req.Context != nil {
 		for k, v := range req.Context {
@@ -234,6 +275,9 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 	if _, hasContribs := updatedContext["agent_contributions"]; !hasContribs {
 		updatedContext["agent_contributions"] = make(map[string]interface{})
 	}
+
+	// Use a mutex for safe access to the shared updatedContext
+	contextLock := sync.Mutex{}
 
 	for i, agentName := range req.Agents {
 		wg.Add(1)
@@ -280,11 +324,13 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 
 			// Process response
 			if response, ok := result.(*NetworkMessage); ok {
+				resultLock.Lock()
 				results[index] = AgentResponse{
 					Agent:   name,
 					Content: response.Content,
 					Data:    response.Data,
 				}
+				resultLock.Unlock()
 
 				// Update conversation trace
 				if trace, ok := agentContext["conversation_trace"].([]string); ok {
@@ -296,11 +342,10 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 
 				// Get response data for context update
 				if responseData, ok := response.Data.(map[string]interface{}); ok {
-					// Send this agent's context update to the channel
-					contextChan <- contextUpdate{
-						agentName: name,
-						data:      responseData,
-					}
+					// Merge context safely using mutex
+					contextLock.Lock()
+					updatedContext = mergeMaps(updatedContext, responseData)
+					contextLock.Unlock()
 				}
 			} else {
 				errors[index] = fmt.Errorf("unexpected response type from agent %s", name)
@@ -310,75 +355,20 @@ func (r *RouterAgent) callAgentsInParallel(ctx actor.Context, req *TransmitReque
 
 	// Wait for all goroutines to complete
 	wg.Wait()
-	close(contextChan)
 
-	// Process all the context updates
-	allContextUpdates := make(map[string]map[string]interface{})
-	contributions := make(map[string]interface{})
-
-	// Extract any existing contributions
-	if existingContribs, ok := updatedContext["agent_contributions"].(map[string]interface{}); ok {
-		for k, v := range existingContribs {
-			contributions[k] = v
-		}
-	}
-
-	// Collect context updates from all agents
-	for update := range contextChan {
-		allContextUpdates[update.agentName] = update.data
-
-		// Record this agent's contribution
-		contributions[update.agentName] = map[string]interface{}{
-			"timestamp": time.Now().Unix(),
-			"content":   results[getIndexForAgent(update.agentName, req.Agents)].Content,
-		}
-	}
-
-	// Update the agent_contributions in the context
-	updatedContext["agent_contributions"] = contributions
-
-	// Merge all context updates
-	for _, contextData := range allContextUpdates {
-		for k, v := range contextData {
-			// Don't overwrite conversation_trace or agent_contributions
-			if k != "conversation_trace" && k != "agent_contributions" {
-				updatedContext[k] = v
-			}
-		}
-	}
-
-	// Update conversation trace with all steps
-	var allTraces []string
-	if trace, ok := updatedContext["conversation_trace"].([]string); ok {
-		allTraces = trace
-	}
-
-	// Collect all traces from agent context updates
-	for agentName, contextData := range allContextUpdates {
-		if trace, ok := contextData["conversation_trace"].([]string); ok {
-			for _, step := range trace {
-				// Only add steps that aren't already in the trace
-				if !contains(allTraces, step) &&
-					(strings.HasPrefix(step, "router -> "+agentName) ||
-						strings.HasPrefix(step, agentName+" -> router")) {
-					allTraces = append(allTraces, step)
-				}
-			}
-		}
-	}
-	updatedContext["conversation_trace"] = allTraces
-
-	// Update the request context
-	req.Context = updatedContext
-
-	// Check for errors
+	// Consolidate errors
+	var combinedError error
 	for _, err := range errors {
 		if err != nil {
-			return results, err
+			if combinedError == nil {
+				combinedError = err
+			} else {
+				combinedError = fmt.Errorf("%v; %w", combinedError, err)
+			}
 		}
 	}
 
-	return results, nil
+	return results, updatedContext, combinedError // Return final context
 }
 
 // getIndexForAgent returns the index of the agent name in the agents slice
@@ -401,35 +391,33 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// callAgentsSequentially calls multiple agents in sequence and collects their responses
-func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitRequest) ([]AgentResponse, error) {
+// callAgentsSequentially calls agents one after another, passing context along
+// Returns results, the final merged context, and any error.
+func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitRequest) ([]AgentResponse, map[string]interface{}, error) {
 	results := make([]AgentResponse, 0, len(req.Agents))
 
-	// Create a copy of the context to pass between agents
-	updatedContext := make(map[string]interface{})
+	// Start with the initial context from the request
+	currentContext := make(map[string]interface{})
 	if req.Context != nil {
 		for k, v := range req.Context {
-			updatedContext[k] = v
+			currentContext[k] = v
 		}
-	} else {
-		updatedContext = make(map[string]interface{})
 	}
 
-	// Add a conversation trace if not present
-	if _, hasTrace := updatedContext["conversation_trace"]; !hasTrace {
-		updatedContext["conversation_trace"] = []string{}
+	if _, hasTrace := currentContext["conversation_trace"]; !hasTrace {
+		currentContext["conversation_trace"] = []string{}
 	}
 
 	for _, agentName := range req.Agents {
 		agent, err := r.network.GetAgent(agentName)
 		if err != nil {
-			return results, fmt.Errorf("agent %s not found", agentName)
+			return results, currentContext, fmt.Errorf("agent %s not found", agentName)
 		}
 
 		// Update conversation trace
-		if trace, ok := updatedContext["conversation_trace"].([]string); ok {
+		if trace, ok := currentContext["conversation_trace"].([]string); ok {
 			trace = append(trace, fmt.Sprintf("router -> %s", agentName))
-			updatedContext["conversation_trace"] = trace
+			currentContext["conversation_trace"] = trace
 		}
 
 		// Create message for agent
@@ -437,7 +425,7 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 			From:    "router",
 			To:      agentName,
 			Content: req.Message,
-			Data:    updatedContext,
+			Data:    currentContext,
 		}
 
 		// Send message to agent
@@ -446,7 +434,7 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 		future := ctx.RequestFuture(agent, message, timeout)
 		result, err := future.Result()
 		if err != nil {
-			return results, err
+			return results, currentContext, err
 		}
 
 		// Process response
@@ -460,13 +448,13 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 			results = append(results, agentResp)
 
 			// Log this agent's processing in the trace
-			if trace, ok := updatedContext["conversation_trace"].([]string); ok {
+			if trace, ok := currentContext["conversation_trace"].([]string); ok {
 				trace = append(trace, fmt.Sprintf("%s -> router", agentName))
-				updatedContext["conversation_trace"] = trace
+				currentContext["conversation_trace"] = trace
 			}
 
 			// Add this agent's contribution to the context history
-			agentContributions, hasContributions := updatedContext["agent_contributions"].(map[string]interface{})
+			agentContributions, hasContributions := currentContext["agent_contributions"].(map[string]interface{})
 			if !hasContributions {
 				agentContributions = make(map[string]interface{})
 			}
@@ -474,26 +462,22 @@ func (r *RouterAgent) callAgentsSequentially(ctx actor.Context, req *TransmitReq
 				"timestamp": time.Now().Unix(),
 				"content":   response.Content,
 			}
-			updatedContext["agent_contributions"] = agentContributions
+			currentContext["agent_contributions"] = agentContributions
 
-			// Update context with agent's response data
+			// Extract and merge context data from the agent's response
 			if response.Data != nil {
-				contextData, isMap := response.Data.(map[string]interface{})
-				if isMap {
-					for k, v := range contextData {
-						updatedContext[k] = v
-					}
+				if responseMap, ok := response.Data.(map[string]interface{}); ok {
+					// Deep merge the result context into the current context
+					currentContext = mergeMaps(currentContext, responseMap)
 				}
 			}
+
 		} else {
-			return results, fmt.Errorf("unexpected response type from agent %s", agentName)
+			return results, currentContext, fmt.Errorf("unexpected response type from agent %s: %T", agentName, result)
 		}
 	}
 
-	// Update the request context with all accumulated context
-	req.Context = updatedContext
-
-	return results, nil
+	return results, currentContext, nil // Return final context
 }
 
 // suggestNextAgents uses the model to suggest which agents might be relevant next

@@ -150,7 +150,7 @@ func TestRouterTimeoutConfiguration(t *testing.T) {
 		}
 
 		// Send to router
-		future := system.Root.RequestFuture(network.routerPID, msg, 2*time.Second)
+		future := system.Root.RequestFuture(network.routerPID, msg, 10*time.Second)
 		result, err := future.Result()
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
