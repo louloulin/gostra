@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/louloulin/gostra/pkg/agent"
@@ -408,4 +409,91 @@ func TestChainOfThoughtWorkflowWithSchema(t *testing.T) {
 	result, err = workflow.Run(context.Background(), validInput)
 	assert.NoError(t, err) // Validation warnings don't cause errors
 	assert.NotNil(t, result)
+}
+
+// TestChainOfThoughtAgentIntegration tests invoking an agent within a CoT step
+func TestChainOfThoughtAgentIntegration(t *testing.T) {
+	// Use the existing TestModelProvider
+	model := &TestModelProvider{}
+
+	// Create actor system and network
+	system := actor.NewActorSystem()
+	networkOpts := &agent.AgentNetworkOptions{
+		ID:          "test-cot-agent-network",
+		Name:        "Test CoT Agent Network",
+		ActorSystem: system,
+	}
+	network, err := agent.NewAgentNetwork(networkOpts, model)
+	assert.NoError(t, err)
+
+	// Create and register the mock agent
+	agentID := "my_test_agent"
+	mockAgent := &MockReceivingAgent{
+		id:          agentID,
+		receivedMsg: make(chan *agent.NetworkMessage, 1), // Buffered channel
+	}
+	err = network.RegisterAgent(agentID, mockAgent)
+	assert.NoError(t, err)
+
+	// Create CoT workflow
+	workflow := NewChainOfThoughtWorkflow("CoT Agent Test", "Testing agent invocation")
+
+	// Add step that uses the agent
+	workflow.AddStep(&ChainOfThoughtStep{
+		ID:            "agent_step",
+		PromptFormat:  "Agent, please process: ${query}",
+		OutputKey:     "agent_result",
+		InputKeys:     []string{"query"},
+		ModelProvider: model, // Still need a model provider for CoT structure
+		Network:       network,
+		AgentID:       agentID, // Specify the agent to use
+	})
+
+	// Run the workflow
+	input := map[string]interface{}{"query": "data for agent"}
+	result, err := workflow.Run(context.Background(), input)
+
+	// Assert workflow completed
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify the agent received the message
+	select {
+	case received := <-mockAgent.receivedMsg:
+		assert.NotNil(t, received, "Agent should have received a message")
+		// Check content based on how CoT step formats the message
+		// This might need adjustment based on actual implementation
+		assert.Contains(t, received.Content, "Agent, please process: data for agent", "Agent received unexpected content")
+	case <-time.After(200 * time.Millisecond): // Timeout
+		t.Fatal("Timed out waiting for agent to receive message")
+	}
+
+	// Verify the result includes the agent's mocked response
+	assert.Contains(t, result["agent_result"], "Response from mock agent")
+}
+
+// MockReceivingAgent is an actor that records received messages
+type MockReceivingAgent struct {
+	id          string
+	receivedMsg chan *agent.NetworkMessage // Channel to signal message receipt
+}
+
+func (a *MockReceivingAgent) Receive(ctx actor.Context) {
+	switch msg := ctx.Message().(type) {
+	case *agent.NetworkMessage:
+		// Send message to channel for test verification
+		select {
+		case a.receivedMsg <- msg:
+		default:
+			// Avoid blocking if channel is full or test already timed out
+		}
+		// Respond as the TestAgent does
+		ctx.Respond(&agent.NetworkMessage{
+			From:    a.id,
+			To:      msg.From,
+			Content: "Response from mock agent: processed",
+		})
+	default:
+		// Handle other message types if necessary, e.g., actor lifecycle messages
+	}
 }

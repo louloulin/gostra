@@ -8,7 +8,6 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/google/uuid"
-	"github.com/louloulin/gostra/pkg/models"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -72,47 +71,47 @@ func (a *TestContextSharingAgent) Receive(ctx actor.Context) {
 	}
 }
 
+// Using mock components from agent_test.go
+// Comment out duplicate mock implementations
+
+/*
 // MockModelProvider for testing
-type MockModelProvider struct{}
+type MockModelProvider struct {
+	mock.Mock
+}
 
 func (m *MockModelProvider) Generate(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (string, error) {
-	return "mock response", nil
+	args := m.Called(ctx, messages, options)
+	return args.String(0), args.Error(1)
 }
 
 func (m *MockModelProvider) GenerateWithFunctionCalls(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (*models.ResponseWithFunctionCalls, error) {
-	return &models.ResponseWithFunctionCalls{
-		Text: "mock response",
-	}, nil
-}
-
-func (m *MockModelProvider) GetID() string {
-	return "mock-model"
-}
-
-func (m *MockModelProvider) GetProvider() string {
-	return "mock"
+	args := m.Called(ctx, messages, options)
+	res := args.Get(0)
+	if res == nil {
+		return nil, args.Error(1)
+	}
+	return res.(*models.ResponseWithFunctionCalls), args.Error(1)
 }
 
 func (m *MockModelProvider) Stream(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (<-chan string, error) {
-	ch := make(chan string, 1)
-	go func() {
-		ch <- "mock stream response"
-		close(ch)
-	}()
-	return ch, nil
+	args := m.Called(ctx, messages, options)
+	res := args.Get(0)
+	if res == nil {
+		return nil, args.Error(1)
+	}
+	return res.(<-chan string), args.Error(1)
 }
 
 func (m *MockModelProvider) StreamWithFunctionCalls(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (<-chan *models.ResponseChunk, error) {
-	ch := make(chan *models.ResponseChunk, 1)
-	go func() {
-		ch <- &models.ResponseChunk{
-			Text:       "mock stream response",
-			IsFinished: true,
-		}
-		close(ch)
-	}()
-	return ch, nil
+	args := m.Called(ctx, messages, options)
+	res := args.Get(0)
+	if res == nil {
+		return nil, args.Error(1)
+	}
+	return res.(<-chan *models.ResponseChunk), args.Error(1)
 }
+*/
 
 // TestContextSharingBetweenAgents tests that context data is properly shared between agents
 func TestContextSharingBetweenAgents(t *testing.T) {

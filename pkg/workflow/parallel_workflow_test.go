@@ -2,7 +2,9 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -546,6 +548,348 @@ func TestParallelWorkflowWithTimingMeasurement(t *testing.T) {
 
 	// The parallel execution should be significantly faster
 	assert.Less(t, executionTime, sequentialTime)
+}
+
+// TestParallelWorkflowWithError tests error handling within parallel steps
+func TestParallelWorkflowWithError(t *testing.T) {
+	// Create a parallel workflow
+	opts := ParallelWorkflowOptions{
+		ID:                    "parallel-error-test",
+		Name:                  "Parallel Error Test Workflow",
+		MaxParallelExecutions: 2,
+	}
+
+	workflow, err := NewParallelWorkflow(opts)
+	assert.NoError(t, err)
+
+	// Step 1: Succeeds
+	workflow.AddStep(&ParallelStep{
+		ID:         "step1-ok",
+		Name:       "Step 1 OK",
+		OutputKey:  "result1",
+		IsParallel: true,
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			time.Sleep(50 * time.Millisecond) // Simulate work
+			return "step 1 success", nil
+		},
+	})
+
+	// Step 2: Fails
+	failError := errors.New("step 2 failed intentionally")
+	workflow.AddStep(&ParallelStep{
+		ID:         "step2-fail",
+		Name:       "Step 2 Fail",
+		OutputKey:  "result2",
+		IsParallel: true,
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			time.Sleep(100 * time.Millisecond) // Simulate work
+			return "", failError
+		},
+	})
+
+	// Step 3: Depends on Step 1 (should not run if Step 2 fails, assuming default behavior)
+	workflow.AddStep(&ParallelStep{
+		ID:        "step3-depend",
+		Name:      "Step 3 Depend",
+		OutputKey: "result3",
+		DependsOn: []string{"step1-ok", "step2-fail"}, // Depends on the failing step
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			t.Log("Step 3 executing - this should not happen if Step 2 failed")
+			return "step 3 result", nil
+		},
+	})
+
+	// Run with parallel execution
+	ctx := context.Background()
+	result, err := workflow.RunWithParallelExecution(ctx, nil)
+
+	// Assert that the workflow run returned the error from the failing step
+	assert.Error(t, err)
+	assert.EqualError(t, err, "step 2 failed intentionally")
+	// Assert that the result map might be partially populated or nil depending on implementation
+	// assert.Nil(t, result) // Or check for partial results
+	assert.NotNil(t, result, "Result map should exist even on error")
+	assert.Equal(t, "step 1 success", result["result1"], "Step 1 should have completed")
+	_, ok := result["result2"] // Result from failing step might not be set
+	assert.False(t, ok, "Result 2 from failing step should not be present")
+	_, ok3 := result["result3"] // Result from dependent step should not be set
+	assert.False(t, ok3, "Result 3 from dependent step should not be present")
+
+	// Optional: Verify internal state if possible (e.g., step statuses)
+	// status, stepErr := workflow.GetStepStatus("step3-depend")
+	// assert.NoError(t, stepErr)
+	// assert.NotEqual(t, StatusCompleted, status.Status)
+}
+
+// TestParallelWorkflowMaxParallelism tests that MaxParallelExecutions limit is respected
+func TestParallelWorkflowMaxParallelism(t *testing.T) {
+	maxParallel := 2
+	stepCount := 4 // More steps than maxParallel
+	stepDelay := 100 * time.Millisecond
+
+	// Create a parallel workflow
+	opts := ParallelWorkflowOptions{
+		ID:                    "max-parallel-test",
+		Name:                  "Max Parallel Test Workflow",
+		MaxParallelExecutions: maxParallel,
+	}
+
+	workflow, err := NewParallelWorkflow(opts)
+	assert.NoError(t, err)
+
+	// Add parallel steps, all independent
+	for i := 0; i < stepCount; i++ {
+		stepID := fmt.Sprintf("parallel_step_%d", i)
+		outputKey := fmt.Sprintf("result_%d", i)
+		workflow.AddStep(&ParallelStep{
+			ID:         stepID,
+			Name:       fmt.Sprintf("Parallel Step %d", i),
+			OutputKey:  outputKey,
+			IsParallel: true,
+			ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+				time.Sleep(stepDelay)
+				return fmt.Sprintf("result from %s", stepID), nil
+			},
+		})
+	}
+
+	// Add a final step that depends on all parallel steps to ensure they all run
+	depends := make([]string, stepCount)
+	for i := 0; i < stepCount; i++ {
+		depends[i] = fmt.Sprintf("parallel_step_%d", i)
+	}
+	workflow.AddStep(&ParallelStep{
+		ID:        "final_step",
+		Name:      "Final Step",
+		OutputKey: "final_result",
+		DependsOn: depends,
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			return "all done", nil
+		},
+	})
+
+	// Run with parallel execution and measure time
+	ctx := context.Background()
+	startTime := time.Now()
+	result, err := workflow.RunWithParallelExecution(ctx, nil)
+	executionTime := time.Since(startTime)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Expected time calculation:
+	// If truly parallel, time would be ~stepDelay (plus overhead).
+	// With maxParallel=2 and stepCount=4, we expect two batches of parallel steps.
+	// So, the minimum expected time is roughly 2 * stepDelay.
+	expectedMinDuration := time.Duration(stepCount/maxParallel) * stepDelay
+	// Add a buffer for overhead
+	expectedMaxDuration := expectedMinDuration + (100 * time.Millisecond)
+
+	t.Logf("Execution Time: %v, Expected Min: %v, Expected Max: %v", executionTime, expectedMinDuration, expectedMaxDuration)
+
+	// Check if the execution time is within the expected range for limited parallelism
+	assert.GreaterOrEqual(t, executionTime, expectedMinDuration, "Execution time too short, parallelism might not be limited")
+	assert.LessOrEqual(t, executionTime, expectedMaxDuration, "Execution time too long, parallelism might be slower than expected or limit not working")
+
+	// Verify all results are present
+	for i := 0; i < stepCount; i++ {
+		assert.Equal(t, fmt.Sprintf("result from parallel_step_%d", i), result[fmt.Sprintf("result_%d", i)])
+	}
+	assert.Equal(t, "all done", result["final_result"])
+}
+
+// TestParallelWorkflowDiamondDependency tests a diamond-shaped dependency graph
+func TestParallelWorkflowDiamondDependency(t *testing.T) {
+	// Create a parallel workflow
+	opts := ParallelWorkflowOptions{
+		ID:                    "diamond-dependency-test",
+		Name:                  "Diamond Dependency Test Workflow",
+		MaxParallelExecutions: 4, // Allow full parallelism for this test
+	}
+
+	workflow, err := NewParallelWorkflow(opts)
+	assert.NoError(t, err)
+
+	stepDelay := 50 * time.Millisecond
+
+	// Step A: The starting point
+	workflow.AddStep(&ParallelStep{
+		ID:        "step_a",
+		Name:      "Step A",
+		OutputKey: "result_a",
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			time.Sleep(stepDelay)
+			return "A", nil
+		},
+	})
+
+	// Step B: Depends on A
+	workflow.AddStep(&ParallelStep{
+		ID:         "step_b",
+		Name:       "Step B",
+		OutputKey:  "result_b",
+		DependsOn:  []string{"step_a"},
+		InputKeys:  []string{"result_a"},
+		IsParallel: true, // Can run in parallel with C
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			time.Sleep(stepDelay)
+			return args.StepInputs["result_a"] + "B", nil
+		},
+	})
+
+	// Step C: Depends on A
+	workflow.AddStep(&ParallelStep{
+		ID:         "step_c",
+		Name:       "Step C",
+		OutputKey:  "result_c",
+		DependsOn:  []string{"step_a"},
+		InputKeys:  []string{"result_a"},
+		IsParallel: true, // Can run in parallel with B
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			time.Sleep(stepDelay)
+			return args.StepInputs["result_a"] + "C", nil
+		},
+	})
+
+	// Step D: Depends on B and C (the join point)
+	workflow.AddStep(&ParallelStep{
+		ID:         "step_d",
+		Name:       "Step D",
+		OutputKey:  "result_d",
+		DependsOn:  []string{"step_b", "step_c"},
+		InputKeys:  []string{"result_b", "result_c"},
+		IsParallel: false, // Final step
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			time.Sleep(stepDelay)
+			return args.StepInputs["result_b"] + args.StepInputs["result_c"] + "D", nil
+		},
+	})
+
+	// Run with parallel execution and measure time
+	ctx := context.Background()
+	startTime := time.Now()
+	result, err := workflow.RunWithParallelExecution(ctx, nil)
+	executionTime := time.Since(startTime)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Expected time: A runs (~50ms), then B and C run in parallel (~50ms), then D runs (~50ms). Total ~150ms.
+	expectedMinDuration := 3 * stepDelay
+	expectedMaxDuration := expectedMinDuration + (100 * time.Millisecond) // Add buffer
+
+	t.Logf("Diamond Execution Time: %v, Expected Min: %v, Expected Max: %v", executionTime, expectedMinDuration, expectedMaxDuration)
+	assert.GreaterOrEqual(t, executionTime, expectedMinDuration)
+	assert.LessOrEqual(t, executionTime, expectedMaxDuration)
+
+	// Verify the final result incorporates results from all branches
+	assert.Equal(t, "A", result["result_a"])
+	assert.Equal(t, "AB", result["result_b"])
+	assert.Equal(t, "AC", result["result_c"])
+	assert.Equal(t, "ABACD", result["result_d"])
+}
+
+// TestParallelWorkflowContextCancellation tests context cancellation during execution
+func TestParallelWorkflowContextCancellation(t *testing.T) {
+	// Create a parallel workflow
+	opts := ParallelWorkflowOptions{
+		ID:                    "context-cancel-test",
+		Name:                  "Context Cancellation Test Workflow",
+		MaxParallelExecutions: 2,
+	}
+
+	workflow, err := NewParallelWorkflow(opts)
+	assert.NoError(t, err)
+
+	stepDelay := 200 * time.Millisecond   // Make steps long enough to cancel
+	stepStartedCh := make(chan string, 2) // Channel to signal step start
+
+	// Step 1: Long running
+	workflow.AddStep(&ParallelStep{
+		ID:        "long_step_1",
+		Name:      "Long Step 1",
+		OutputKey: "result_1",
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			stepStartedCh <- "long_step_1"
+			select {
+			case <-time.After(stepDelay):
+				return "step 1 finished normally", nil
+			case <-ctx.Done():
+				return "", ctx.Err() // Propagate context error
+			}
+		},
+	})
+
+	// Step 2: Long running
+	workflow.AddStep(&ParallelStep{
+		ID:        "long_step_2",
+		Name:      "Long Step 2",
+		OutputKey: "result_2",
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			stepStartedCh <- "long_step_2"
+			select {
+			case <-time.After(stepDelay):
+				return "step 2 finished normally", nil
+			case <-ctx.Done():
+				return "", ctx.Err() // Propagate context error
+			}
+		},
+	})
+
+	// Step 3: Depends on 1 and 2 (should not run)
+	workflow.AddStep(&ParallelStep{
+		ID:        "final_step",
+		Name:      "Final Step",
+		OutputKey: "final_result",
+		DependsOn: []string{"long_step_1", "long_step_2"},
+		ExecuteFunc: func(ctx context.Context, args *ParallelStepArgs) (string, error) {
+			t.Log("Final step executing - this should not happen after cancellation")
+			return "final", nil
+		},
+	})
+
+	// Create a context that can be cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var wg sync.WaitGroup
+	var runErr error
+	var result map[string]interface{}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Run the workflow in a goroutine
+		result, runErr = workflow.RunWithParallelExecution(ctx, nil)
+	}()
+
+	// Wait for at least one step to start before cancelling
+	startedCount := 0
+	timeout := time.After(500 * time.Millisecond) // Timeout for waiting step start
+Loop:
+	for startedCount < 1 {
+		select {
+		case stepID := <-stepStartedCh:
+			t.Logf("Step started: %s", stepID)
+			startedCount++
+			// break Loop // Optionally break after the first step starts
+		case <-timeout:
+			t.Log("Timeout waiting for steps to start")
+			break Loop
+		}
+	}
+
+	// Cancel the context after a short delay or after steps start
+	t.Log("Cancelling context...")
+	cancel()
+
+	// Wait for the workflow goroutine to finish
+	wg.Wait()
+
+	// Assert that the error is context.Canceled
+	assert.Error(t, runErr)
+	assert.ErrorIs(t, runErr, context.Canceled, "Error should be context.Canceled")
+	assert.Nil(t, result["final_result"], "Final step should not have run") // Check final result wasn't produced
+
+	// Depending on timing, some steps might have finished before cancellation took effect
+	t.Logf("Result map after cancellation: %v", result)
 }
 
 // TestDependencyResolution tests that dependencies are correctly resolved

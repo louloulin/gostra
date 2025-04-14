@@ -8,6 +8,7 @@ import (
 
 	"github.com/louloulin/gostra"
 	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/memory"
 	"github.com/louloulin/gostra/pkg/models/openai"
 	"github.com/louloulin/gostra/pkg/tools"
 )
@@ -38,6 +39,33 @@ func (s *TimeToolSchema) JSONSchema() (map[string]interface{}, error) {
 		},
 		"required": []string{},
 	}, nil
+}
+
+// Validate validates the input against the schema
+func (s *TimeToolSchema) Validate(params map[string]interface{}) error {
+	// Simple validation, in a real implementation you would check the format value
+	if format, exists := params["format"]; exists {
+		formatStr, ok := format.(string)
+		if !ok {
+			return fmt.Errorf("format is not a string")
+		}
+
+		// Check if format is one of the allowed values
+		validFormats := []string{"full", "date", "time"}
+		isValid := false
+		for _, validFormat := range validFormats {
+			if formatStr == validFormat {
+				isValid = true
+				break
+			}
+		}
+
+		if !isValid {
+			return fmt.Errorf("invalid format: %s", formatStr)
+		}
+	}
+
+	return nil
 }
 
 func (t *CurrentTimeTool) GetInputSchema() tools.Schema {
@@ -73,26 +101,38 @@ func main() {
 		os.Exit(1)
 	}
 
-	provider := openai.NewProvider(&openai.ProviderOptions{
+	// Create OpenAI provider
+	provider, err := openai.NewOpenAIProvider(&openai.Options{
 		APIKey: apiKey,
+		Model:  "gpt-3.5-turbo",
 	})
+
+	if err != nil {
+		fmt.Printf("Failed to create OpenAI provider: %v\n", err)
+		os.Exit(1)
+	}
+
 	g.RegisterModelProvider("openai", provider)
+
+	// Create a simple in-memory provider
+	memoryProvider := memory.NewInMemoryProvider()
 
 	// Register a tool
 	timeTool := &CurrentTimeTool{}
 	g.RegisterTool(timeTool)
 
-	// Register an agent
-	assistant, err := g.RegisterAgent("assistant", &agent.Options{
-		ID:            "assistant",
-		Name:          "Time Assistant",
-		SystemPrompt:  "You are a helpful assistant with access to tools. Your responses should be concise and helpful.",
-		ModelProvider: provider,
-		Tools:         []tools.Tool{timeTool},
+	// Create an agent directly instead of using RegisterAgent
+	assistant, err := agent.NewAgent(&agent.Options{
+		ID:             "assistant",
+		Name:           "Time Assistant",
+		SystemPrompt:   "You are a helpful assistant with access to tools. Your responses should be concise and helpful.",
+		ModelProvider:  provider,
+		MemoryProvider: memoryProvider,
+		Tools:          []tools.Tool{timeTool},
 	})
 
 	if err != nil {
-		fmt.Printf("Failed to register agent: %v\n", err)
+		fmt.Printf("Failed to create agent: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -138,7 +178,7 @@ func main() {
 		}
 
 		fmt.Printf("Total steps executed: %d\n", stepCount)
-		fmt.Println("=============================\n")
+		fmt.Println("=============================")
 		return nil // No error in callback
 	}
 
