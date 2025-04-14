@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -9,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/louloulin/gostra/pkg/memory"
 	"github.com/louloulin/gostra/pkg/models"
-	"github.com/louloulin/gostra/pkg/tools"
 	"github.com/louloulin/gostra/pkg/tools/document"
 	"github.com/louloulin/gostra/pkg/tools/search"
 )
@@ -96,7 +96,7 @@ func NewGraphRAGTool(options GraphRAGOptions) (*GraphRAGTool, error) {
 }
 
 // AddDocument adds a document to the graph RAG system
-func (g *GraphRAGTool) AddDocument(documentContent string, documentID string, metadata map[string]interface{}) error {
+func (g *GraphRAGTool) AddDocument(ctx context.Context, documentContent string, documentID string, metadata map[string]interface{}) error {
 	// Create a simple chunk from the document content
 	chunk := document.Chunk{
 		Content:  documentContent,
@@ -105,7 +105,7 @@ func (g *GraphRAGTool) AddDocument(documentContent string, documentID string, me
 	}
 
 	// Add the chunk to the graph
-	if err := g.addChunkToGraph(chunk, 0, documentID); err != nil {
+	if err := g.addChunkToGraph(ctx, chunk, 0, documentID); err != nil {
 		return fmt.Errorf("failed to add chunk to graph: %v", err)
 	}
 
@@ -114,18 +114,24 @@ func (g *GraphRAGTool) AddDocument(documentContent string, documentID string, me
 }
 
 // addChunkToGraph adds a single document chunk to the graph
-func (g *GraphRAGTool) addChunkToGraph(chunk document.Chunk, chunkIndex int, documentPath string) error {
+func (g *GraphRAGTool) addChunkToGraph(ctx context.Context, chunk document.Chunk, chunkIndex int, documentPath string) error {
 	// Generate embedding for the chunk
-	embedding, err := g.embeddingProvider.GetEmbedding(chunk.Content)
+	embedding32, err := g.embeddingProvider.GetEmbedding(chunk.Content)
 	if err != nil {
 		return fmt.Errorf("failed to generate embedding: %v", err)
+	}
+
+	// Convert embedding to float64 slice
+	embedding64 := make([]float64, len(embedding32))
+	for i, v := range embedding32 {
+		embedding64[i] = float64(v)
 	}
 
 	// Create unique ID for the chunk
 	chunkID := fmt.Sprintf("doc:%s:chunk:%d", uuid.New().String(), chunkIndex)
 
-	// Create metadata
-	metadata := map[string]string{
+	// Create metadata for storage
+	storeMetadata := map[string]interface{}{
 		"source":     documentPath,
 		"index":      fmt.Sprintf("%d", chunkIndex),
 		"chunk_size": fmt.Sprintf("%d", len(chunk.Content)),
@@ -133,7 +139,12 @@ func (g *GraphRAGTool) addChunkToGraph(chunk document.Chunk, chunkIndex int, doc
 	}
 
 	// Store the embedding in the vector store
-	if err := g.vectorStore.Store(chunkID, embedding, metadata); err != nil {
+	vector := memory.Vector{
+		ID:       chunkID,
+		Values:   embedding32, // Use float32 for memory.Vector
+		Metadata: storeMetadata,
+	}
+	if err := g.vectorStore.Store(ctx, []memory.Vector{vector}); err != nil {
 		return fmt.Errorf("failed to store embedding: %v", err)
 	}
 
@@ -141,12 +152,18 @@ func (g *GraphRAGTool) addChunkToGraph(chunk document.Chunk, chunkIndex int, doc
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// Metadata for the graph node
+	graphMetadata := map[string]string{}
+	for k, v := range storeMetadata {
+		graphMetadata[k] = fmt.Sprint(v)
+	}
+
 	node := &Node{
 		ID:        chunkID,
 		Type:      DocumentNode,
 		Content:   chunk.Content,
-		Embedding: embedding,
-		Metadata:  metadata,
+		Embedding: embedding64, // Use float64 for graph Node
+		Metadata:  graphMetadata,
 		Score:     1.0, // Initial score
 	}
 
@@ -207,17 +224,29 @@ func (g *GraphRAGTool) createRelationshipsBetweenDocumentChunks(documentPath str
 }
 
 // Search performs a graph-enhanced search for the given query
-func (g *GraphRAGTool) Search(query string, options models.GenerateOptions) (*GraphSearchResult, error) {
+func (g *GraphRAGTool) Search(ctx context.Context, query string, options models.GenerateOptions) (*GraphSearchResult, error) {
 	result := NewGraphSearchResult()
 
 	// 1. Get embedding for the query
-	queryEmbedding, err := g.embeddingProvider.GetEmbedding(query)
+	queryEmbedding32, err := g.embeddingProvider.GetEmbedding(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate query embedding: %v", err)
 	}
+	queryEmbedding64 := make([]float64, len(queryEmbedding32))
+	for i, v := range queryEmbedding32 {
+		queryEmbedding64[i] = float64(v)
+	}
 
 	// 2. Initial vector search to find similar chunks
-	searchResults, err := g.vectorStore.Search(queryEmbedding, 5, nil)
+	searchOpts := memory.VectorSearchOptions{
+		Limit:     5,
+		Threshold: 0.0, // Adjust threshold as needed
+		Filter:    nil, // Add filter if needed
+	}
+	queryVector := memory.Vector{
+		Values: queryEmbedding32,
+	}
+	searchResults, err := g.vectorStore.Search(ctx, queryVector, searchOpts)
 	if err != nil {
 		return nil, fmt.Errorf("vector search failed: %v", err)
 	}
@@ -227,7 +256,7 @@ func (g *GraphRAGTool) Search(query string, options models.GenerateOptions) (*Gr
 		ID:        fmt.Sprintf("query:%s", uuid.New().String()),
 		Type:      QueryNode,
 		Content:   query,
-		Embedding: queryEmbedding,
+		Embedding: queryEmbedding64, // Use float64 for graph Node
 		Metadata:  map[string]string{"type": "query"},
 	}
 
@@ -237,8 +266,8 @@ func (g *GraphRAGTool) Search(query string, options models.GenerateOptions) (*Gr
 
 	// 5. Connect query node with relevant document nodes
 	for _, item := range searchResults {
-		if node, exists := g.graph.GetNode(item.ID); exists {
-			similarity := cosineSimilarity(queryEmbedding, node.Embedding)
+		if node, exists := g.graph.GetNode(item.Vector.ID); exists { // Access ID via item.Vector.ID
+			similarity := cosineSimilarity(queryEmbedding64, node.Embedding) // Use float64 embeddings
 
 			// Add edge from query to document
 			g.graph.AddEdge(queryNode, node, similarity, EdgeSimilarity, map[string]string{
@@ -279,12 +308,14 @@ func (g *GraphRAGTool) Search(query string, options models.GenerateOptions) (*Gr
 	// 10. Analyze relationships between the nodes
 	result.Relationships = g.analyzeRelationships(result.DirectMatches, result.RelatedNodes)
 
-	// 11. Generate a summary of the findings using LLM
-	summary, err := g.generateSummary(query, result, options)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate summary: %v", err)
-	}
-	result.Summary = summary
+	// 11. Generate a summary of the findings using LLM (Commented out due to undefined tools.Generate)
+	/*
+		summary, err := g.generateSummary(ctx, query, result, options)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate summary: %v", err)
+		}
+		result.Summary = summary
+	*/
 
 	return result, nil
 }
@@ -338,7 +369,7 @@ func (g *GraphRAGTool) analyzeRelationships(directMatches, relatedNodes []*Node)
 }
 
 // generateSummary generates a summary of the search results using the LLM
-func (g *GraphRAGTool) generateSummary(query string, result *GraphSearchResult, options models.GenerateOptions) (string, error) {
+func (g *GraphRAGTool) generateSummary(ctx context.Context, query string, result *GraphSearchResult, options models.GenerateOptions) (string, error) {
 	// Prepare context for the LLM
 	var contextBuilder strings.Builder
 
@@ -363,25 +394,30 @@ func (g *GraphRAGTool) generateSummary(query string, result *GraphSearchResult, 
 	}
 
 	// Create system message
-	systemMessage := "You are a knowledge graph assistant. Analyze the provided context from a graph RAG search and provide a concise summary that answers the query. Focus on synthesizing information and highlighting key relationships between concepts."
+	// systemMessage := "You are a knowledge graph assistant. Analyze the provided context from a graph RAG search and provide a concise summary that answers the query. Focus on synthesizing information and highlighting key relationships between concepts."
 
 	// Create user message
-	userMessage := contextBuilder.String() + "\nPlease provide a comprehensive summary that answers the query based on the above information."
+	// userMessage := contextBuilder.String() + "\nPlease provide a comprehensive summary that answers the query based on the above information."
 
 	// Prepare messages for the LLM
-	messages := []models.Message{
-		{Role: "system", Content: systemMessage},
-		{Role: "user", Content: userMessage},
-	}
+	/*
+		messages := []models.Message{
+			{Role: "system", Content: systemMessage},
+			{Role: "user", Content: userMessage},
+		}
+	*/
 
 	// Set up generate options
-	generateOptions := options
+	// generateOptions := options // Commented out as generateOptions is unused
 
-	// Generate response using LLM
-	response, err := tools.Generate(messages, generateOptions)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate summary: %v", err)
-	}
+	// Generate response using LLM (Commented out)
+	/*
+		response, err := tools.Generate(messages, generateOptions)
+		if err != nil {
+			return "", fmt.Errorf("failed to generate summary: %v", err)
+		}
+	*/
+	response := "Summary generation is currently disabled." // Placeholder
 
 	return response, nil
 }

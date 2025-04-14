@@ -108,10 +108,10 @@ func (g *KnowledgeGraph) ApplyPageRank(dampingFactor float64, iterations int) {
 			// Calculate sum of incoming connections
 			for _, edge := range g.Edges {
 				if edge.Target.ID == node.ID {
-					sourceNode := edge.Source
-					outgoingEdges := len(sourceNode.Connections)
+					// sourceNode := edge.Source // Variable not used
+					outgoingEdges := len(edge.Source.Connections)
 					if outgoingEdges > 0 {
-						scores[node.ID] += dampingFactor * sourceNode.Score * edge.Weight / float64(outgoingEdges)
+						scores[node.ID] += dampingFactor * edge.Source.Score * edge.Weight / float64(outgoingEdges)
 					}
 				}
 			}
@@ -146,12 +146,12 @@ func (g *KnowledgeGraph) GetTopNodes(n int) []*Node {
 // GetPathBetween finds the shortest path between two nodes
 func (g *KnowledgeGraph) GetPathBetween(source, target string) []*Node {
 	// Basic implementation of Dijkstra's algorithm
-	sourceNode, exists := g.GetNode(source)
+	_, exists := g.GetNode(source)
 	if !exists {
 		return nil
 	}
 
-	targetNode, exists := g.GetNode(target)
+	_, exists = g.GetNode(target)
 	if !exists {
 		return nil
 	}
