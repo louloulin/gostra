@@ -10,6 +10,7 @@ import (
 	"github.com/louloulin/gostra/pkg/agent"
 	"github.com/louloulin/gostra/pkg/memory"
 	"github.com/louloulin/gostra/pkg/models/openai"
+	"github.com/louloulin/gostra/pkg/tools"
 	"github.com/louloulin/gostra/pkg/tools/document"
 	"github.com/louloulin/gostra/pkg/tools/search"
 )
@@ -30,12 +31,10 @@ func main() {
 	ctx := context.Background()
 
 	// 初始化Actor系统
-	system := actor.NewActorSystem(&actor.Configuration{
-		Name: "rag-example",
-	})
+	system := actor.NewActorSystem(&actor.Configuration{})
 
 	// 创建OpenAI提供者
-	openaiProvider, err := openai.NewOpenAIProvider(openai.Options{
+	openaiProvider, err := openai.NewOpenAIProvider(&openai.Options{
 		APIKey: openaiKey,
 		Model:  "gpt-4o",
 	})
@@ -44,7 +43,7 @@ func main() {
 	}
 
 	// 创建嵌入向量提供者
-	embeddingProvider, err := openai.NewOpenAIEmbeddingProvider(openai.EmbeddingOptions{
+	embeddingProvider, err := memory.NewOpenAIEmbeddingProvider(&memory.OpenAIEmbeddingOptions{
 		APIKey: openaiKey,
 		Model:  "text-embedding-3-small",
 	})
@@ -70,7 +69,7 @@ func main() {
 	}
 
 	// 创建文档分块工具
-	documentChunker := document.NewDocumentChunker(document.ChunkerOptions{})
+	documentChunker := document.NewDocumentChunker(document.DocumentChunkerOptions{})
 
 	// 创建向量搜索工具
 	vectorSearchTool := search.NewVectorSearchTool(search.VectorSearchOptions{
@@ -119,10 +118,11 @@ func main() {
 	}
 
 	// 创建RAG (Retrieval Augmented Generation) 的代理
-	ragAgent := agent.NewAgentWithTools(agent.AgentOptions{
+	ragAgent, err := agent.NewAgent(&agent.Options{
+		ID:            "rag-agent",
 		Name:          "rag-agent",
 		ModelProvider: openaiProvider,
-		Instructions: `你是一个擅长基于文档回答问题的助手。
+		SystemPrompt: `你是一个擅长基于文档回答问题的助手。
 你只使用提供的文档内容回答问题，不会编造信息。
 如果问题无法从文档内容中回答，请明确告知用户。
 
@@ -135,10 +135,18 @@ func main() {
 5. 嵌套字段: {"nested.field": value}
 
 当你需要使用高级过滤时，请构建适当的filters参数以便更精确地检索信息。`,
-	}, []actor.Tool{documentSearchTool})
+		Tools: []tools.Tool{documentSearchTool},
+	})
+	if err != nil {
+		log.Fatalf("Failed to create agent: %v", err)
+	}
 
 	// 注册Agent
-	system.RegisterAgent(ragAgent)
+	agentID, err := system.RegisterAgent("rag-agent", ragAgent)
+	if err != nil {
+		log.Fatalf("Failed to register agent: %v", err)
+	}
+	log.Printf("Agent registered with ID: %s", agentID)
 
 	// 启动Actor系统
 	system.Start()
