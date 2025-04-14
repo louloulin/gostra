@@ -283,7 +283,7 @@ By 2000, Riverdale had partially achieved economic transition, with a stabilized
 		"How did Riverdale respond to industrial decline? What strategies were used?",
 	}
 
-	fmt.Println("\n===== Graph RAG Demo =====\n")
+	fmt.Println("\n===== Graph RAG Demo =====")
 
 	// Create a thread ID for this session
 	threadID := "graph-rag-demo-" + time.Now().Format("20060102150405")

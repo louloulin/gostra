@@ -272,6 +272,8 @@ func runImplementation() {
 	if ok {
 		fmt.Printf("最终评分: %.2f\n", finalScore)
 	}
+
+	fmt.Println("Workflow completed successfully!")
 }
 
 // 模拟函数
@@ -300,7 +302,7 @@ func RunSuspendResumeExample() {
 	fmt.Println("=== 带有数据恢复的事件驱动工作流示例 ===")
 	fmt.Println("这个示例展示了如何暂停工作流并保存状态数据")
 	fmt.Println("然后在恢复时使用这些数据继续执行")
-	fmt.Println("===========================\n")
+	fmt.Println("===========================")
 
 	runImplementation()
 }

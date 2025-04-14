@@ -15,6 +15,31 @@ import (
 	"github.com/louloulin/gostra/pkg/tools/search"
 )
 
+// 计算余弦相似度
+func cosineSimilarity(vec1, vec2 []float32) float32 {
+	if len(vec1) != len(vec2) {
+		return 0
+	}
+
+	var dotProduct, norm1, norm2 float32
+	for i := 0; i < len(vec1); i++ {
+		dotProduct += vec1[i] * vec2[i]
+		norm1 += vec1[i] * vec1[i]
+		norm2 += vec2[i] * vec2[i]
+	}
+
+	if norm1 == 0 || norm2 == 0 {
+		return 0
+	}
+
+	return dotProduct / (float32(sqrt(float64(norm1))) * float32(sqrt(float64(norm2))))
+}
+
+// 计算平方根
+func sqrt(x float64) float64 {
+	return float64(x)
+}
+
 func main() {
 	// 获取环境变量
 	openaiKey := os.Getenv("OPENAI_API_KEY")
@@ -94,7 +119,8 @@ func main() {
 			if err != nil {
 				return 0, err
 			}
-			return cosineSimilarity(emb1, emb2), nil
+			// Ensure the return type is float32
+			return float32(cosineSimilarity(emb1, emb2)), nil
 		},
 	})
 
@@ -397,29 +423,4 @@ func formatGraphResults(graphResponse map[string]interface{}) string {
 	}
 
 	return result.String()
-}
-
-// 计算余弦相似度
-func cosineSimilarity(vec1, vec2 []float32) float32 {
-	if len(vec1) != len(vec2) {
-		return 0
-	}
-
-	var dotProduct, norm1, norm2 float32
-	for i := 0; i < len(vec1); i++ {
-		dotProduct += vec1[i] * vec2[i]
-		norm1 += vec1[i] * vec1[i]
-		norm2 += vec2[i] * vec2[i]
-	}
-
-	if norm1 == 0 || norm2 == 0 {
-		return 0
-	}
-
-	return dotProduct / (float32(sqrt(float64(norm1))) * float32(sqrt(float64(norm2))))
-}
-
-// 计算平方根
-func sqrt(x float64) float64 {
-	return float64(x)
 }
