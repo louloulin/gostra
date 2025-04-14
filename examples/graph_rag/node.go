@@ -8,8 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Node represents a node in the knowledge graph
-type Node struct {
+// GraphNode represents a node in the knowledge graph
+type GraphNode struct {
 	// Unique identifier for the node
 	ID string
 
@@ -26,11 +26,11 @@ type Node struct {
 	CreatedAt time.Time
 
 	// Edges connected to this node
-	Edges []*Edge
+	Edges []*GraphEdge
 }
 
-// Edge represents a directed connection between two nodes
-type Edge struct {
+// GraphEdge represents a directed connection between two nodes
+type GraphEdge struct {
 	// Type of relationship
 	Type string
 
@@ -47,29 +47,29 @@ type Edge struct {
 	CreatedAt time.Time
 }
 
-// NewNode creates a new node with the provided content
-func NewNode(content string, metadata map[string]interface{}) *Node {
+// NewGraphNode creates a new node with the provided content
+func NewGraphNode(content string, metadata map[string]interface{}) *GraphNode {
 	if metadata == nil {
 		metadata = make(map[string]interface{})
 	}
 
-	return &Node{
+	return &GraphNode{
 		ID:        uuid.New().String(),
 		Content:   content,
 		Metadata:  metadata,
 		Vector:    nil, // Will be populated when embedding is generated
 		CreatedAt: time.Now(),
-		Edges:     make([]*Edge, 0),
+		Edges:     make([]*GraphEdge, 0),
 	}
 }
 
 // AddEdge creates and adds a new edge from this node to the target node
-func (n *Node) AddEdge(edgeType string, targetNode *Node, properties map[string]interface{}) *Edge {
+func (n *GraphNode) AddEdge(edgeType string, targetNode *GraphNode, properties map[string]interface{}) *GraphEdge {
 	if properties == nil {
 		properties = make(map[string]interface{})
 	}
 
-	edge := &Edge{
+	edge := &GraphEdge{
 		Type:       edgeType,
 		SourceID:   n.ID,
 		TargetID:   targetNode.ID,
@@ -82,8 +82,8 @@ func (n *Node) AddEdge(edgeType string, targetNode *Node, properties map[string]
 }
 
 // GetEdgesByType returns all edges of a specific type from this node
-func (n *Node) GetEdgesByType(edgeType string) []*Edge {
-	edges := make([]*Edge, 0)
+func (n *GraphNode) GetEdgesByType(edgeType string) []*GraphEdge {
+	edges := make([]*GraphEdge, 0)
 	for _, edge := range n.Edges {
 		if edge.Type == edgeType {
 			edges = append(edges, edge)
@@ -93,7 +93,7 @@ func (n *Node) GetEdgesByType(edgeType string) []*Edge {
 }
 
 // ToJSON serializes the node to JSON
-func (n *Node) ToJSON() (string, error) {
+func (n *GraphNode) ToJSON() (string, error) {
 	data, err := json.Marshal(n)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal node to JSON: %w", err)
@@ -102,8 +102,8 @@ func (n *Node) ToJSON() (string, error) {
 }
 
 // FromJSON deserializes a node from JSON
-func NodeFromJSON(data string) (*Node, error) {
-	var node Node
+func GraphNodeFromJSON(data string) (*GraphNode, error) {
+	var node GraphNode
 	if err := json.Unmarshal([]byte(data), &node); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal node from JSON: %w", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/louloulin/gostra/pkg/actor"
 	"github.com/louloulin/gostra/pkg/agent"
 	"github.com/louloulin/gostra/pkg/memory"
 	"github.com/louloulin/gostra/pkg/models/openai"
@@ -16,7 +15,7 @@ import (
 )
 
 // 计算余弦相似度
-func cosineSimilarity(vec1, vec2 []float32) float32 {
+func cosineSimFloat32(vec1, vec2 []float32) float32 {
 	if len(vec1) != len(vec2) {
 		return 0
 	}
@@ -55,11 +54,6 @@ func main() {
 	// 创建上下文
 	ctx := context.Background()
 
-	// 初始化Actor系统
-	system := actor.NewActorSystem(actor.ActorSystemConfig{
-		Name: "graph-rag-example",
-	})
-
 	// 创建OpenAI提供者
 	openaiProvider, err := openai.NewOpenAIProvider(&openai.Options{
 		APIKey: openaiKey,
@@ -70,9 +64,12 @@ func main() {
 	}
 
 	// 创建嵌入向量提供者
-	embeddingProvider := &openai.OpenAIEmbedder{
+	embeddingProvider, err := search.NewOpenAIEmbeddingProvider(search.OpenAIEmbeddingOptions{
 		APIKey: openaiKey,
-		Model:  "text-embedding-3-small",
+		Model:  search.ModelTextEmbedding3Small,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create OpenAI embedder: %v", err)
 	}
 
 	// 创建PostgreSQL向量存储
@@ -120,7 +117,7 @@ func main() {
 				return 0, err
 			}
 			// Ensure the return type is float32
-			return float32(cosineSimilarity(emb1, emb2)), nil
+			return float32(cosineSimFloat32(emb1, emb2)), nil
 		},
 	})
 
@@ -134,41 +131,15 @@ func main() {
 		ChunkStrategy:     document.StrategyRecursive,
 	})
 
-	// 创建存储文档的函数，使用PostgreSQL
-	storeDocumentFunction := func(chunks []*document.DocumentChunk) error {
-		// 提取文本内容
-		texts := make([]string, len(chunks))
-		for i, chunk := range chunks {
-			texts[i] = chunk.Content
-		}
-
-		// 获取嵌入向量
-		embeddings, err := embeddingProvider.GetEmbeddings(texts)
-		if err != nil {
-			return fmt.Errorf("获取嵌入向量失败: %w", err)
-		}
-
-		// 转换为向量存储格式
-		vectors := make([]memory.Vector, len(chunks))
-		for i, chunk := range chunks {
-			id := fmt.Sprintf("%s-%d", chunk.DocumentID, i)
-			vectors[i] = memory.Vector{
-				ID:       id,
-				Values:   embeddings[i],
-				Metadata: chunk.Metadata,
-			}
-		}
-
-		// 存储到PostgreSQL
-		return pgVectorStore.Store(ctx, vectors)
-	}
+	// 创建内存提供者
+	memoryProvider := memory.NewInMemoryProvider()
 
 	// 创建RAG (Retrieval Augmented Generation) Agent
-	graphRAGAgent := agent.NewAgent(&agent.AgentConfig{
-		Name:          "graph-rag-agent",
-		ModelProvider: openaiProvider,
-		Tools:         []agent.Tool{graphRAGTool},
-		Instructions: `你是一个擅长使用Graph RAG技术回答问题的助手。
+	graphRAGAgent, err := agent.NewAgent(&agent.Options{
+		Name:           "graph-rag-agent",
+		ModelProvider:  openaiProvider,
+		MemoryProvider: memoryProvider,
+		SystemPrompt: `你是一个擅长使用Graph RAG技术回答问题的助手。
 Graph RAG能够构建文档块之间的知识图谱，并使用PageRank等算法找到最相关的信息。
 请按以下格式回答:
 
@@ -178,24 +149,34 @@ Graph RAG能够构建文档块之间的知识图谱，并使用PageRank等算法
 
 请保持简洁，专注于最重要的信息。`,
 	})
+	if err != nil {
+		log.Fatalf("Failed to create graph RAG agent: %v", err)
+	}
+
+	// 手动注册工具
+	err = graphRAGAgent.RegisterTool(graphRAGTool)
+	if err != nil {
+		log.Fatalf("Failed to register graph RAG tool: %v", err)
+	}
 
 	// 创建文档处理Agent
-	documentAgent := agent.NewAgent(&agent.AgentConfig{
-		Name:          "document-agent",
-		ModelProvider: openaiProvider,
-		Tools:         []agent.Tool{documentSearchTool},
-		Instructions: `你是一个擅长处理和分析文档的助手。
+	documentAgent, err := agent.NewAgent(&agent.Options{
+		Name:           "document-agent",
+		ModelProvider:  openaiProvider,
+		MemoryProvider: memoryProvider,
+		SystemPrompt: `你是一个擅长处理和分析文档的助手。
 你可以使用文档搜索工具在已添加的文档中查找相关信息。
 请简洁明了地回答用户的问题，只基于文档内容，不要添加额外信息。`,
 	})
+	if err != nil {
+		log.Fatalf("Failed to create document agent: %v", err)
+	}
 
-	// 注册Agent
-	system.RegisterAgent("graph-rag-agent", graphRAGAgent)
-	system.RegisterAgent("document-agent", documentAgent)
-
-	// 启动Actor系统
-	system.Start()
-	defer system.Stop()
+	// 手动注册工具
+	err = documentAgent.RegisterTool(documentSearchTool)
+	if err != nil {
+		log.Fatalf("Failed to register document search tool: %v", err)
+	}
 
 	// 样本文档内容
 	sampleDocument := `# 城市发展历史：河谷镇案例研究
@@ -340,59 +321,19 @@ Graph RAG能够构建文档块之间的知识图谱，并使用PageRank等算法
 	for _, query := range demoQueries {
 		fmt.Printf("\n问题: %s\n", query)
 
-		// 使用Graph RAG获取知识图谱和查询结果
-		params := map[string]interface{}{
-			"query":     query,
-			"top_k":     5,
-			"threshold": 0.6,
-			"method":    "simple",
+		// 执行GraphRAG查询
+		runOpts := &agent.RunOptions{
+			Input: query,
 		}
 
-		// 发送GraphRAG查询消息到Agent
-		actorContext := actor.NewContext(ctx)
-		response, err := system.SendAndReceive(actorContext, "graph-rag-agent", "Execute", "graph_rag", params)
-		if err != nil {
-			log.Printf("Error: %v", err)
-			continue
-		}
-
-		// 整理查询结果
-		graphResponse, ok := response.(map[string]interface{})
-		if !ok {
-			log.Printf("Error: unexpected response type")
-			continue
-		}
-
-		// 使用图结果生成最终回答
-		graphStr := formatGraphResults(graphResponse)
-
-		// 构建带有图结果的提示
-		prompt := fmt.Sprintf(`请基于以下知识图谱结果回答问题：
-问题: %s
-
-知识图谱结果:
-%s
-
-请按要求的格式回答：
-1. 直接事实：
-2. 关联发现：
-3. 结论：`, query, graphStr)
-
-		// 获取最终回答
-		finalResponse, err := system.SendAndReceive(actorContext, "graph-rag-agent", "Generate", prompt, nil)
+		response, err := graphRAGAgent.Run(ctx, runOpts)
 		if err != nil {
 			log.Printf("Error: %v", err)
 			continue
 		}
 
 		// 打印回答
-		finalText, ok := finalResponse.(string)
-		if !ok {
-			log.Printf("Error: unexpected final response type")
-			continue
-		}
-
-		fmt.Printf("回答:\n%s\n", finalText)
+		fmt.Printf("回答:\n%s\n", response)
 		fmt.Println(strings.Repeat("-", 80))
 	}
 }

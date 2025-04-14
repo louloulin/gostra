@@ -96,28 +96,21 @@ func NewGraphRAGTool(options GraphRAGOptions) (*GraphRAGTool, error) {
 }
 
 // AddDocument adds a document to the graph RAG system
-func (g *GraphRAGTool) AddDocument(path string) error {
-	// Load document from file
-	doc, err := document.LoadFromFile(path)
-	if err != nil {
-		return fmt.Errorf("failed to load document from file: %v", err)
+func (g *GraphRAGTool) AddDocument(documentContent string, documentID string, metadata map[string]interface{}) error {
+	// Create a simple chunk from the document content
+	chunk := document.Chunk{
+		Content:  documentContent,
+		ID:       documentID,
+		Metadata: metadata,
 	}
 
-	// Process document into chunks
-	chunks, err := doc.Chunk(g.chunkSize, g.chunkOverlap)
-	if err != nil {
-		return fmt.Errorf("failed to chunk document: %v", err)
+	// Add the chunk to the graph
+	if err := g.addChunkToGraph(chunk, 0, documentID); err != nil {
+		return fmt.Errorf("failed to add chunk to graph: %v", err)
 	}
 
-	// Add each chunk to the graph
-	for i, chunk := range chunks {
-		if err := g.addChunkToGraph(chunk, i, path); err != nil {
-			return fmt.Errorf("failed to add chunk to graph: %v", err)
-		}
-	}
-
-	// After adding all chunks, create relationships between them
-	return g.createRelationshipsBetweenDocumentChunks(path)
+	// For simplicity, we're not chunking or creating relationships between chunks
+	return nil
 }
 
 // addChunkToGraph adds a single document chunk to the graph
