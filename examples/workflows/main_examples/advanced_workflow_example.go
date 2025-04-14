@@ -9,6 +9,7 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/louloulin/gostra/pkg/agent"
+	"github.com/louloulin/gostra/pkg/models"
 	"github.com/louloulin/gostra/pkg/models/openai"
 	"github.com/louloulin/gostra/pkg/workflow"
 )
@@ -82,7 +83,7 @@ func runAdvancedWorkflowExample() {
 }
 
 // Create a nested workflow for data processing
-func createDataProcessingWorkflow(modelProvider openai.ModelProvider, network *agent.AgentNetwork) (*workflow.NestedWorkflow, error) {
+func createDataProcessingWorkflow(modelProvider models.ModelProvider, network *agent.AgentNetwork) (*workflow.NestedWorkflow, error) {
 	// Create the nested workflow for data processing
 	dataProcessingOpts := workflow.ParallelWorkflowOptions{
 		ID:                    "data-processing-workflow",
@@ -94,60 +95,6 @@ func createDataProcessingWorkflow(modelProvider openai.ModelProvider, network *a
 	dataWorkflow, err := workflow.NewNestedWorkflow(dataProcessingOpts)
 	if err != nil {
 		return nil, err
-	}
-
-	// Add a step to collect data
-	collectDataStep := &workflow.Step{
-		ID:          "collect-data",
-		Name:        "Collect Data",
-		Description: "Collect information on the topic",
-		Execute: func(ctx context.Context, input map[string]interface{}, w *workflow.Workflow) (map[string]interface{}, error) {
-			topic := input["topic"].(string)
-			fmt.Printf("Collecting data on: %s\n", topic)
-
-			// Simulate data collection
-			time.Sleep(500 * time.Millisecond)
-
-			return map[string]interface{}{
-				"raw_data": fmt.Sprintf("Raw data about %s collected from various sources", topic),
-			}, nil
-		},
-	}
-
-	// Add a step to analyze data
-	analyzeDataStep := &workflow.Step{
-		ID:          "analyze-data",
-		Name:        "Analyze Data",
-		Description: "Analyze the collected data",
-		Execute: func(ctx context.Context, input map[string]interface{}, w *workflow.Workflow) (map[string]interface{}, error) {
-			rawData := input["raw_data"].(string)
-			fmt.Printf("Analyzing data: %s\n", rawData)
-
-			// Simulate data analysis
-			time.Sleep(500 * time.Millisecond)
-
-			return map[string]interface{}{
-				"analyzed_data": fmt.Sprintf("Analysis of %s", rawData),
-			}, nil
-		},
-	}
-
-	// Add a step to format results
-	formatResultsStep := &workflow.Step{
-		ID:          "format-results",
-		Name:        "Format Results",
-		Description: "Format the analyzed data into a presentable format",
-		Execute: func(ctx context.Context, input map[string]interface{}, w *workflow.Workflow) (map[string]interface{}, error) {
-			analyzedData := input["analyzed_data"].(string)
-			fmt.Printf("Formatting results: %s\n", analyzedData)
-
-			// Simulate formatting
-			time.Sleep(500 * time.Millisecond)
-
-			return map[string]interface{}{
-				"formatted_data": fmt.Sprintf("Formatted version of: %s", analyzedData),
-			}, nil
-		},
 	}
 
 	// Add the steps to the workflow
@@ -193,7 +140,7 @@ func createDataProcessingWorkflow(modelProvider openai.ModelProvider, network *a
 }
 
 // Create the main advanced workflow
-func createAdvancedWorkflow(modelProvider openai.ModelProvider, network *agent.AgentNetwork, dataProcessingWorkflow *workflow.NestedWorkflow) (*workflow.NestedWorkflow, error) {
+func createAdvancedWorkflow(modelProvider models.ModelProvider, network *agent.AgentNetwork, dataProcessingWorkflow *workflow.NestedWorkflow) (*workflow.NestedWorkflow, error) {
 	// Create the main workflow
 	advancedOpts := workflow.ParallelWorkflowOptions{
 		ID:                    "advanced-workflow",
@@ -205,32 +152,6 @@ func createAdvancedWorkflow(modelProvider openai.ModelProvider, network *agent.A
 	advancedWorkflow, err := workflow.NewNestedWorkflow(advancedOpts)
 	if err != nil {
 		return nil, err
-	}
-
-	// Initial step to validate input
-	validateInputStep := &workflow.Step{
-		ID:          "validate-input",
-		Name:        "Validate Input",
-		Description: "Validate the input parameters",
-		Execute: func(ctx context.Context, input map[string]interface{}, w *workflow.Workflow) (map[string]interface{}, error) {
-			topic, topicExists := input["topic"].(string)
-			userLevel, levelExists := input["user_level"].(string)
-
-			if !topicExists || topic == "" {
-				return nil, fmt.Errorf("topic is required")
-			}
-
-			if !levelExists || userLevel == "" {
-				userLevel = "intermediate" // Default if not provided
-				fmt.Println("User level not provided, defaulting to 'intermediate'")
-			}
-
-			return map[string]interface{}{
-				"topic":      topic,
-				"user_level": userLevel,
-				"is_valid":   true,
-			}, nil
-		},
 	}
 
 	// Add the validate input step to the workflow

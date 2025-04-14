@@ -97,7 +97,7 @@ func (m *MockVoiceModel) SpeechToText(ctx context.Context, options *models.Speec
 }
 
 func TestMultiModelSupport(t *testing.T) {
-	g := New(nil)
+	g := NewGostra(nil)
 
 	// 测试文本模型注册和获取
 	textModel := &MockTextModel{
@@ -181,7 +181,7 @@ func TestMultiModelSupport(t *testing.T) {
 
 // 测试错误处理
 func TestMultiModelErrorHandling(t *testing.T) {
-	g := New(nil)
+	g := NewGostra(nil)
 
 	// 测试注册nil模型
 	if err := g.RegisterTextModel("text1", nil); err == nil {

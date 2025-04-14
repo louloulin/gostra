@@ -45,6 +45,41 @@ func (p *SimpleModelProvider) Stream(ctx context.Context, messages []models.Mess
 	return ch, nil
 }
 
+// GenerateWithFunctionCalls implements the models.ModelProvider interface for function calls
+func (p *SimpleModelProvider) GenerateWithFunctionCalls(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (*models.ResponseWithFunctionCalls, error) {
+	// 简单模拟LLM响应，不支持函数调用
+	text, err := p.Generate(ctx, messages, options)
+	if err != nil {
+		return nil, err
+	}
+	return &models.ResponseWithFunctionCalls{
+		Text:         text,
+		FinishReason: "stop", // 模拟停止原因
+	}, nil
+}
+
+// StreamWithFunctionCalls implements the models.ModelProvider interface for streaming with function calls
+func (p *SimpleModelProvider) StreamWithFunctionCalls(ctx context.Context, messages []models.Message, options *models.GenerateOptions) (<-chan *models.ResponseChunk, error) {
+	// 简单模拟流式响应，不支持函数调用
+	ch := make(chan *models.ResponseChunk, 1)
+
+	go func() {
+		defer close(ch)
+		text, err := p.Generate(ctx, messages, options) // 获取模拟的文本
+		if err != nil {
+			// 可以发送一个错误块，或者只记录错误
+			log.Printf("Error generating text for stream: %v", err)
+			return
+		}
+		ch <- &models.ResponseChunk{
+			Text:       text,
+			IsFinished: true,
+		}
+	}()
+
+	return ch, nil
+}
+
 func main() {
 	log.Println("Starting workflow example...")
 

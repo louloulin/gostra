@@ -49,7 +49,7 @@ func runParallelWorkflowExample() {
 	}
 
 	// Create a parallel workflow
-	parallelWorkflow := workflow.NewParallelWorkflow(workflow.ParallelWorkflowOptions{
+	parallelWorkflow, err := workflow.NewParallelWorkflow(workflow.ParallelWorkflowOptions{
 		ID:          "product-research-workflow",
 		Name:        "Product Research Workflow",
 		Description: "A workflow that conducts parallel research on a product and creates a comprehensive summary",
@@ -94,6 +94,9 @@ func runParallelWorkflowExample() {
 		},
 		MaxParallelExecutions: 3,
 	})
+	if err != nil {
+		log.Fatalf("Failed to create parallel workflow: %v", err)
+	}
 
 	// Add Market Research Step (Parallel Step 1)
 	parallelWorkflow.AddStep(&workflow.ParallelStep{
@@ -214,6 +217,13 @@ func runParallelWorkflowExample() {
 	fmt.Println("\nParallel Workflow completed successfully!")
 }
 
-func main() {
+// mainParallelWorkflow is the entry point for the parallel workflow example
+func mainParallelWorkflow() {
+	log.Println("Starting parallel workflow example...")
 	runParallelWorkflowExample()
 }
+
+// // Uncomment this if you want to run this example file directly
+// func main() {
+// 	mainParallelWorkflow()
+// }
