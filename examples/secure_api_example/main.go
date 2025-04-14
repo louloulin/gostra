@@ -18,7 +18,7 @@ import (
 
 func main() {
 	// Create new Gostra instance
-	gostra := pkg.NewGostra()
+	gostra := pkg.NewGostra(pkg.DefaultOptions())
 
 	// Create user repository
 	userRepo := api.NewInMemoryUserRepository()

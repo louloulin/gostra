@@ -22,7 +22,7 @@ func main() {
 
 	// 创建Gostra实例
 	log.Println("初始化Gostra...")
-	g := pkg.New(nil)
+	g := pkg.NewGostra(pkg.DefaultOptions())
 
 	// 启动Gostra
 	if err := g.Start(ctx); err != nil {
@@ -38,7 +38,7 @@ func main() {
 		"echo",
 		"回显输入的消息",
 		&EchoSchema{},
-		func(ctx context.Context, params map[string]interface{}, options tools.ExecuteOptions) (interface{}, error) {
+		func(params map[string]interface{}, options *tools.ExecuteOptions) (interface{}, error) {
 			message, _ := params["message"].(string)
 			return map[string]interface{}{
 				"message": message,
@@ -85,7 +85,7 @@ func main() {
 	}
 
 	// 注册Agent
-	if err := g.RegisterAgent("simple-agent", agent); err != nil {
+	if err := g.RegisterAgent(agent); err != nil {
 		log.Fatalf("注册Agent失败: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func (s *EchoSchema) Validate(params map[string]interface{}) error {
 	return nil
 }
 
-func (s *EchoSchema) JSONSchema() map[string]interface{} {
+func (s *EchoSchema) JSONSchema() (map[string]interface{}, error) {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
@@ -154,5 +154,5 @@ func (s *EchoSchema) JSONSchema() map[string]interface{} {
 			},
 		},
 		"required": []string{"message"},
-	}
+	}, nil
 }

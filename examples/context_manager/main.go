@@ -1,3 +1,4 @@
+// Package main demonstrates using the context manager
 package main
 
 import (
@@ -10,11 +11,20 @@ import (
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/louloulin/gostra/pkg/agent"
 	"github.com/louloulin/gostra/pkg/memory"
-	"github.com/louloulin/gostra/pkg/models"
 	"github.com/louloulin/gostra/pkg/models/openai"
 )
 
+// Document represents a simple document
+type Document struct {
+	content  string
+	priority int
+	source   string
+	itemType string
+}
+
 func main() {
+	fmt.Println("Context Manager Example")
+
 	// 获取OpenAI API密钥
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -22,16 +32,16 @@ func main() {
 	}
 
 	// 创建OpenAI模型提供者
-	modelProvider, err := openai.NewOpenAIProvider(&openai.OpenAIOptions{
-		APIKey:  apiKey,
-		ModelID: "gpt-3.5-turbo",
+	modelProvider, err := openai.NewOpenAIProvider(&openai.Options{
+		APIKey: apiKey,
+		Model:  "gpt-3.5-turbo",
 	})
 	if err != nil {
 		log.Fatalf("创建OpenAI模型提供者失败: %v", err)
 	}
 
 	// 创建嵌入向量提供者
-	embeddingProvider, err := memory.NewOpenAIEmbeddingProvider(memory.OpenAIEmbeddingOptions{
+	embeddingProvider, err := memory.NewOpenAIEmbeddingProvider(&memory.OpenAIEmbeddingOptions{
 		APIKey: apiKey,
 		Model:  "text-embedding-3-small",
 	})
@@ -65,7 +75,7 @@ func main() {
 	agentOptions := &agent.ActorAgentOptions{
 		ID:             "context-agent",
 		Name:           "ContextAwareAgent",
-		SystemPrompt:   "你是一个具备上下文感知能力的AI助手。你的回答将根据上下文历史和相关信息进行调整。",
+		SystemPrompt:   "You are an AI assistant with context awareness. Your responses will be adjusted based on the context history and related information.",
 		ModelProvider:  modelProvider,
 		MemoryProvider: memoryProvider,
 		ActorSystem:    actorSystem,
@@ -84,11 +94,12 @@ func main() {
 
 	fmt.Println("Agent已启动，PID:", pid.String())
 
-	// 添加一些上下文项目
-	addContextItems(contextManager)
+	// Add context items
+	ctx := context.Background()
+	addContextItems(ctx, contextManager)
 
-	// 查询Agent，测试上下文管理
-	runAgentQueries(rootCtx, pid, contextManager)
+	// Query the context
+	searchContext(ctx, contextManager, "artificial intelligence and neural networks")
 
 	// 清理
 	rootCtx.Stop(pid)
@@ -96,154 +107,79 @@ func main() {
 	fmt.Println("Agent已停止")
 }
 
-// 添加上下文项目
-func addContextItems(ctx memory.ContextManager) {
-	c := context.Background()
-
-	// 添加一些示例文档
-	documents := []struct {
-		content  string
-		priority int
-		source   string
-		itemType string
-	}{
+// Add sample items to the context
+func addContextItems(ctx context.Context, contextManager memory.ContextManager) {
+	// Sample documents
+	documents := []Document{
 		{
-			content:  "人工智能(AI)是计算机科学的一个分支，它致力于创建能够模拟人类智能的系统。现代AI技术包括机器学习、深度学习、自然语言处理等领域。",
+			content:  "Artificial Intelligence (AI) is a branch of computer science dedicated to creating systems capable of performing tasks that typically require human intelligence.",
 			priority: 5,
 			source:   "document",
 			itemType: "knowledge",
 		},
 		{
-			content:  "机器学习是人工智能的一个子集，它使用统计技术让计算机系统能够"学习"，而无需明确编程。常见的机器学习类型包括监督学习、无监督学习和强化学习。",
+			content:  "Machine Learning is a subset of AI that uses statistical techniques to enable computers to 'learn' without being explicitly programmed.",
 			priority: 4,
 			source:   "document",
 			itemType: "knowledge",
 		},
 		{
-			content:  "深度学习是机器学习的一个子集，它使用神经网络结构进行学习。神经网络模拟人类大脑的结构，由多层神经元组成，能够处理复杂的数据模式。",
+			content:  "Deep Learning is a subset of Machine Learning that uses neural network structures for learning. Neural networks simulate the structure of the human brain.",
 			priority: 3,
 			source:   "document",
 			itemType: "knowledge",
 		},
 	}
 
-	// 添加文档到上下文
-	for _, doc := range documents {
+	fmt.Println("Adding context items...")
+
+	// Add documents to context
+	for i, doc := range documents {
 		item := &memory.ContextItem{
 			Content:  doc.content,
 			Type:     doc.itemType,
 			Priority: doc.priority,
 			Source:   doc.source,
 		}
-		if err := ctx.AddItem(c, item); err != nil {
-			log.Printf("添加上下文项目失败: %v", err)
+		if err := contextManager.AddItem(ctx, item); err != nil {
+			log.Printf("Failed to add context item %d: %v", i, err)
+		} else {
+			fmt.Printf("Added item %d: %s...\n", i, doc.content[:30])
 		}
 	}
 
-	// 添加用户偏好
+	// Add user preferences
 	preferences := &memory.ContextItem{
-		Content:  "用户偏好简洁、准确的回答，不需要太多技术细节。",
+		Content:  "User prefers concise, accurate answers without excessive technical details.",
 		Type:     "preference",
 		Priority: 5,
 		Source:   "user",
 	}
-	if err := ctx.AddItem(c, preferences); err != nil {
-		log.Printf("添加用户偏好失败: %v", err)
+	if err := contextManager.AddItem(ctx, preferences); err != nil {
+		log.Printf("Failed to add user preferences: %v", err)
+	} else {
+		fmt.Println("Added user preferences")
 	}
-
-	fmt.Println("已添加上下文项目")
 }
 
-// 运行Agent查询
-func runAgentQueries(rootCtx *actor.RootContext, pid *actor.PID, contextManager memory.ContextManager) {
-	queries := []string{
-		"什么是人工智能？",
-		"机器学习和深度学习的关系是什么？",
-		"解释一下神经网络的工作原理",
+// Search the context with a query
+func searchContext(ctx context.Context, contextManager memory.ContextManager, query string) {
+	fmt.Printf("\nQuerying context with: %s\n", query)
+
+	// Retrieve relevant context
+	contextRetrieval, err := contextManager.RetrieveContext(ctx, query, 2000, nil)
+	if err != nil {
+		log.Printf("Failed to retrieve context: %v", err)
+		return
 	}
 
-	ctx := context.Background()
-
-	for _, query := range queries {
-		fmt.Printf("\n查询: %s\n", query)
-
-		// 检索相关上下文
-		contextRetrieval, err := contextManager.RetrieveContext(ctx, query, 2000, nil)
-		if err != nil {
-			log.Printf("检索上下文失败: %v", err)
-			continue
-		}
-
-		// 创建消息，包含上下文
-		messages := make([]models.Message, 0)
-
-		// 添加系统消息，包含用户偏好
-		var systemPrompt string
-		for _, item := range contextRetrieval.Items {
-			if item.Type == "preference" {
-				systemPrompt += item.Content + "\n"
-			}
-		}
-		if systemPrompt != "" {
-			messages = append(messages, models.Message{
-				Role:    "system",
-				Content: systemPrompt,
-			})
-		}
-
-		// 添加上下文知识
-		contextContent := "以下是相关的上下文信息：\n\n"
-		for _, item := range contextRetrieval.Items {
-			if item.Type == "knowledge" {
-				contextContent += "- " + item.Content + "\n"
-			}
-		}
-		if contextContent != "以下是相关的上下文信息：\n\n" {
-			messages = append(messages, models.Message{
-				Role:    "user",
-				Content: contextContent,
-			})
-			messages = append(messages, models.Message{
-				Role:    "assistant",
-				Content: "我理解了这些信息，请问您有什么问题？",
-			})
-		}
-
-		// 添加用户查询
-		messages = append(messages, models.Message{
-			Role:    "user",
-			Content: query,
-		})
-
-		// 发送请求给Agent
-		generateMsg := &agent.AgentGenerateMessage{
-			Messages: messages,
-		}
-
-		future := rootCtx.RequestFuture(pid, generateMsg, 30*time.Second)
-		result, err := future.Result()
-		if err != nil {
-			log.Printf("获取Agent响应失败: %v", err)
-			continue
-		}
-
-		// 处理响应
-		if response, ok := result.(*agent.AgentGenerateResponse); ok {
-			fmt.Printf("Agent响应: %s\n", response.Text)
-
-			// 保存对话到上下文
-			dialogItem := &memory.ContextItem{
-				Content:  "用户: " + query + "\n助手: " + response.Text,
-				Type:     "dialog",
-				Priority: 4,
-				Source:   "conversation",
-				TTL:      30 * time.Minute, // 对话上下文30分钟后过期
-			}
-			if err := contextManager.AddItem(ctx, dialogItem); err != nil {
-				log.Printf("保存对话到上下文失败: %v", err)
-			}
-		} else {
-			fmt.Printf("未能解析Agent响应: %v\n", result)
-		}
+	// Display results
+	fmt.Printf("Found %d relevant context items:\n", len(contextRetrieval.Items))
+	for i, item := range contextRetrieval.Items {
+		fmt.Printf("%d. [%s] Priority %d: %s\n",
+			i+1,
+			item.Type,
+			item.Priority,
+			item.Content)
 	}
-} 
+}

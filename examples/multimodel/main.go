@@ -19,7 +19,7 @@ func main() {
 	}
 
 	// 创建Gostra实例
-	gostra := pkg.New(nil)
+	gostra := pkg.NewGostra(pkg.DefaultOptions())
 
 	// 初始化文本模型
 	textModel, err := openai.NewOpenAIProvider(&openai.Options{
