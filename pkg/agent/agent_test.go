@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/asynkron/protoactor-go/actor"
 	"github.com/louloulin/gostra/pkg/memory"
 	"github.com/louloulin/gostra/pkg/models"
 	"github.com/louloulin/gostra/pkg/tools"
@@ -210,7 +211,6 @@ func TestAgent_Run_NoTools(t *testing.T) {
 	// Verify mocks
 	mockModel.AssertExpectations(t)
 	mockMemory.AssertExpectations(t)
-
 }
 
 func TestAgent_Run_SingleToolCall(t *testing.T) {
@@ -286,10 +286,694 @@ func TestAgent_Run_SingleToolCall(t *testing.T) {
 	mockTool.AssertExpectations(t)
 }
 
+func TestAgent_RunWithCallbacks_OnStepFinish(t *testing.T) {
+	agent, mockModel, mockMemory, mockTool := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-callbacks-step"
+	userInput := "Use the tool with callbacks"
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil).Once()
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "Using the tool.", mock.Anything).Return("msg2", nil).Once()
+	mockMemory.On("AddMessage", ctx, threadID, "tool", `{"result":"tool result"}`, mock.Anything).Return("msg3", nil).Once()
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+		{Role: "assistant", Content: "Using the tool.", Metadata: map[string]interface{}{"tool_calls": []interface{}{}}},
+		{Role: "tool", Content: `{"result":"tool result"}`, Metadata: map[string]interface{}{"tool_call_id": "call1", "tool_name": "mock_tool"}},
+	}, nil).Once()
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "Final response", mock.Anything).Return("msg4", nil).Once()
+
+	// Mock ModelProvider
+	toolCallArgs, _ := json.Marshal(map[string]interface{}{"input": "step-data"})
+	modelResponse1 := &models.ResponseWithFunctionCalls{
+		Text: "Using the tool.",
+		ToolCalls: []models.ToolCall{
+			{ID: "call1", Type: "function", Function: models.FunctionCall{Name: "mock_tool", Arguments: string(toolCallArgs)}},
+		},
+		FinishReason: "tool_calls",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(modelResponse1, nil).Once()
+
+	modelResponse2 := &models.ResponseWithFunctionCalls{
+		Text:         "Final response",
+		FinishReason: "stop",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(modelResponse2, nil).Once()
+
+	// Mock Tool execution
+	mockTool.On("Execute", map[string]interface{}{"input": "step-data"}, mock.Anything).Return(map[string]string{"result": "tool result"}, nil).Once()
+
+	// Track callbacks
+	var stepFinishCalled bool
+	var stepData StepFinishData
+
+	runOpts := &RunOptions{
+		ThreadID:          threadID,
+		Input:             userInput,
+		AvailableTools:    []tools.Tool{mockTool},
+		MaxConsecutiveCalls: 5,
+		OnStepFinish: func(data StepFinishData) {
+			stepFinishCalled = true
+			stepData = data
+		},
+	}
+
+	finalResponse, err := agent.RunWithCallbacks(ctx, runOpts)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.Equal(t, "Final response", finalResponse)
+	assert.True(t, stepFinishCalled, "OnStepFinish callback was not called")
+	assert.NotEmpty(t, stepData.Text, "Step text should not be empty")
+	assert.NotEmpty(t, stepData.ToolCalls, "Tool calls should not be empty")
+	assert.Equal(t, "mock_tool", stepData.ToolCalls[0].Function.Name, "Tool name should match")
+	assert.NotEmpty(t, stepData.ToolResults, "Tool results should not be empty")
+
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+	mockTool.AssertExpectations(t)
+}
+
+func TestAgent_RunWithCallbacks_OnFinish(t *testing.T) {
+	agent, mockModel, mockMemory, mockTool := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-callbacks-finish"
+	userInput := "Process this with onFinish"
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil).Once()
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "Final response", mock.Anything).Return("msg2", nil).Once()
+
+	// Mock ModelProvider
+	modelResponse := &models.ResponseWithFunctionCalls{
+		Text:         "Final response",
+		FinishReason: "stop",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(modelResponse, nil).Once()
+
+	// Track callbacks
+	var finishCalled bool
+	var finishData FinishData
+
+	runOpts := &RunOptions{
+		ThreadID:       threadID,
+		Input:          userInput,
+		AvailableTools: []tools.Tool{mockTool},
+		OnFinish: func(data FinishData) {
+			finishCalled = true
+			finishData = data
+		},
+	}
+
+	finalResponse, err := agent.RunWithCallbacks(ctx, runOpts)
+
+	// Assertions
+	assert.NoError(t, err)
+	assert.Equal(t, "Final response", finalResponse)
+	assert.True(t, finishCalled, "OnFinish callback was not called")
+	assert.Equal(t, finalResponse, finishData.FinalResponse, "Final response should match")
+	assert.Equal(t, 0, len(finishData.Steps), "No steps should be recorded for direct response")
+
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+}
+
 // TODO: Add more tests:
+// - TestAgent_Run_MaxConsecutiveCalls
+// - TestAgent_Run_ModelError
 // - TestAgent_Run_ToolArgParseError
 // - TestAgent_Run_ToolNotFoundError
 // - TestAgent_Run_ToolExecuteError
 
+// Implementing the first test from the TODO list
+func TestAgent_Run_MaxConsecutiveCalls(t *testing.T) {
+	agent, mockModel, mockMemory, mockTool := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-max-consecutive-calls"
+	userInput := "Use the tool repeatedly"
 
-``` 
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once() // First GetMessages
+
+	// Set up model to always return tool calls
+	// This will create a situation where the model always wants to call tools,
+	// so we can test the max consecutive calls limit
+	toolCallArgs, _ := json.Marshal(map[string]interface{}{"input": "test-data"})
+	
+	// Create a model response that always requests a tool call
+	toolCallResponse := &models.ResponseWithFunctionCalls{
+		Text: "I'll use the tool again.",
+		ToolCalls: []models.ToolCall{
+			{ID: "call1", Type: "function", Function: models.FunctionCall{Name: "mock_tool", Arguments: string(toolCallArgs)}},
+		},
+		FinishReason: "tool_calls",
+	}
+
+	// Make the model always return a tool call response
+	// This will be called up to MaxConsecutiveCalls times
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(toolCallResponse, nil)
+
+	// Set up mock memory for each round
+	// 1. For the first tool call
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I'll use the tool again.", mock.Anything).Return("msg2", nil)
+	mockMemory.On("AddMessage", ctx, threadID, "tool", mock.Anything, mock.Anything).Return("msg3", nil)
+	
+	// 2. For the second round of messages retrieval
+	mockMessages2 := []memory.Message{
+		{Role: "user", Content: userInput},
+		{Role: "assistant", Content: "I'll use the tool again.", Metadata: map[string]interface{}{"tool_calls": []interface{}{}}},
+		{Role: "tool", Content: `{"result":"tool result"}`, Metadata: map[string]interface{}{"tool_call_id": "call1", "tool_name": "mock_tool"}},
+	}
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return(mockMessages2, nil).Once()
+	
+	// 3. For the second tool call
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I'll use the tool again.", mock.Anything).Return("msg4", nil)
+	mockMemory.On("AddMessage", ctx, threadID, "tool", mock.Anything, mock.Anything).Return("msg5", nil)
+	
+	// 4. For the third round of messages retrieval
+	mockMessages3 := append(mockMessages2, 
+		memory.Message{Role: "assistant", Content: "I'll use the tool again.", Metadata: map[string]interface{}{"tool_calls": []interface{}{}}},
+		memory.Message{Role: "tool", Content: `{"result":"tool result"}`, Metadata: map[string]interface{}{"tool_call_id": "call1", "tool_name": "mock_tool"}},
+	)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return(mockMessages3, nil).Once()
+	
+	// Mock Tool execution - will be called MaxConsecutiveCalls times
+	mockTool.On("Execute", map[string]interface{}{"input": "test-data"}, mock.Anything).Return(map[string]string{"result": "tool result"}, nil).Times(2)
+
+	// Set MaxConsecutiveCalls to 2, which means it should stop after 2 tool calls
+	runOpts := &RunOptions{
+		ThreadID:             threadID,
+		Input:                userInput,
+		AvailableTools:       []tools.Tool{mockTool},
+		MaxConsecutiveCalls:  2, // Key setting for this test
+	}
+
+	// Run the agent
+	_, err := agent.Run(ctx, runOpts)
+
+	// We expect an error because MaxConsecutiveCalls was exceeded
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeded maximum consecutive tool calls")
+
+	// Verify that the model and tool were called exactly 2 times
+	mock.AssertExpectationsForObjects(t, mockTool)
+	// Note: mockModel expectations are not precisely verified here because
+	// we're using Return() which doesn't limit call count
+}
+
+// Implementing the second test from the TODO list
+func TestAgent_Run_ModelError(t *testing.T) {
+	agent, mockModel, mockMemory, _ := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-model-error"
+	userInput := "This will cause a model error"
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+
+	// Make the model return an error
+	expectedError := errors.New("model service unavailable")
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(nil, expectedError).Once()
+
+	runOpts := &RunOptions{
+		ThreadID: threadID,
+		Input:    userInput,
+	}
+
+	// Run the agent
+	_, err := agent.Run(ctx, runOpts)
+
+	// We expect the error from the model to be propagated
+	assert.Error(t, err)
+	assert.Equal(t, expectedError, err)
+
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+}
+
+// Implementing the third test from the TODO list
+func TestAgent_Run_ToolArgParseError(t *testing.T) {
+	agent, mockModel, mockMemory, mockTool := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-tool-arg-parse-error"
+	userInput := "Call a tool with invalid arguments"
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+
+	// Create an invalid JSON for tool arguments
+	invalidToolCallArgs := "invalid-json-format"
+
+	// Create a model response that requests a tool call with invalid arguments
+	toolCallResponse := &models.ResponseWithFunctionCalls{
+		Text: "I'll use the tool.",
+		ToolCalls: []models.ToolCall{
+			{ID: "call1", Type: "function", Function: models.FunctionCall{Name: "mock_tool", Arguments: invalidToolCallArgs}},
+		},
+		FinishReason: "tool_calls",
+	}
+
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(toolCallResponse, nil).Once()
+	
+	// Mock for adding the assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I'll use the tool.", mock.Anything).Return("msg2", nil)
+	
+	// Mock for adding the error tool message
+	// This will contain the parsing error
+	mockMemory.On("AddMessage", ctx, threadID, "tool", mock.Anything, mock.Anything).Return("msg3", nil)
+	
+	// For the second round, after the error
+	mockMessages2 := []memory.Message{
+		{Role: "user", Content: userInput},
+		{Role: "assistant", Content: "I'll use the tool.", Metadata: map[string]interface{}{"tool_calls": []interface{}{}}},
+		{Role: "tool", Content: mock.Anything, Metadata: map[string]interface{}{"tool_call_id": "call1", "tool_name": "mock_tool", "error": true}},
+	}
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return(mockMessages2, nil).Once()
+	
+	// For the final response without tool calls
+	finalResponse := &models.ResponseWithFunctionCalls{
+		Text: "I encountered an error with the tool.",
+		FinishReason: "stop",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(finalResponse, nil).Once()
+	
+	// For the final assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I encountered an error with the tool.", mock.Anything).Return("msg4", nil)
+
+	runOpts := &RunOptions{
+		ThreadID:        threadID,
+		Input:           userInput,
+		AvailableTools:  []tools.Tool{mockTool},
+	}
+
+	// Run the agent
+	result, err := agent.Run(ctx, runOpts)
+
+	// We expect no error returned from Run itself, but the tool execution should have failed
+	assert.NoError(t, err)
+	assert.Equal(t, "I encountered an error with the tool.", result)
+
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+	// We don't expect the tool to be executed at all due to parse error
+	mockTool.AssertNotCalled(t, "Execute", mock.Anything, mock.Anything)
+}
+
+// Implementing the fourth test from the TODO list
+func TestAgent_Run_ToolNotFoundError(t *testing.T) {
+	agent, mockModel, mockMemory, _ := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-tool-not-found"
+	userInput := "Call a non-existent tool"
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+
+	// Valid JSON arguments but for a non-existent tool
+	toolCallArgs, _ := json.Marshal(map[string]interface{}{"input": "test-data"})
+
+	// Create a model response that requests a non-existent tool
+	toolCallResponse := &models.ResponseWithFunctionCalls{
+		Text: "I'll use the non_existent_tool.",
+		ToolCalls: []models.ToolCall{
+			{ID: "call1", Type: "function", Function: models.FunctionCall{Name: "non_existent_tool", Arguments: string(toolCallArgs)}},
+		},
+		FinishReason: "tool_calls",
+	}
+
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(toolCallResponse, nil).Once()
+	
+	// Mock for adding the assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I'll use the non_existent_tool.", mock.Anything).Return("msg2", nil)
+	
+	// Mock for adding the error tool message
+	mockMemory.On("AddMessage", ctx, threadID, "tool", mock.Anything, mock.Anything).Return("msg3", nil)
+	
+	// For the second round, after the error
+	mockMessages2 := []memory.Message{
+		{Role: "user", Content: userInput},
+		{Role: "assistant", Content: "I'll use the non_existent_tool.", Metadata: map[string]interface{}{"tool_calls": []interface{}{}}},
+		{Role: "tool", Content: mock.Anything, Metadata: map[string]interface{}{"tool_call_id": "call1", "tool_name": "non_existent_tool", "error": true}},
+	}
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return(mockMessages2, nil).Once()
+	
+	// For the final response without tool calls
+	finalResponse := &models.ResponseWithFunctionCalls{
+		Text: "I couldn't find the tool.",
+		FinishReason: "stop",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(finalResponse, nil).Once()
+	
+	// For the final assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I couldn't find the tool.", mock.Anything).Return("msg4", nil)
+
+	// Run options without providing the "non_existent_tool"
+	runOpts := &RunOptions{
+		ThreadID: threadID,
+		Input:    userInput,
+		// Intentionally not providing any tools
+	}
+
+	// Run the agent
+	result, err := agent.Run(ctx, runOpts)
+
+	// We expect no error returned from Run itself, but the tool not found error should be handled
+	assert.NoError(t, err)
+	assert.Equal(t, "I couldn't find the tool.", result)
+
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+}
+
+// Implementing the fifth test from the TODO list
+func TestAgent_Run_ToolExecuteError(t *testing.T) {
+	agent, mockModel, mockMemory, mockTool := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-tool-execute-error"
+	userInput := "Use a tool that will fail during execution"
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+
+	// Valid JSON arguments for the tool
+	toolCallArgs, _ := json.Marshal(map[string]interface{}{"input": "cause-error"})
+
+	// Create a model response that requests the tool
+	toolCallResponse := &models.ResponseWithFunctionCalls{
+		Text: "I'll use the tool.",
+		ToolCalls: []models.ToolCall{
+			{ID: "call1", Type: "function", Function: models.FunctionCall{Name: "mock_tool", Arguments: string(toolCallArgs)}},
+		},
+		FinishReason: "tool_calls",
+	}
+
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(toolCallResponse, nil).Once()
+	
+	// Mock for adding the assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I'll use the tool.", mock.Anything).Return("msg2", nil)
+	
+	// Mock the tool to return an error
+	expectedToolError := errors.New("tool execution failed")
+	mockTool.On("Execute", map[string]interface{}{"input": "cause-error"}, mock.Anything).Return(nil, expectedToolError).Once()
+	
+	// Mock for adding the error tool message
+	mockMemory.On("AddMessage", ctx, threadID, "tool", mock.Anything, mock.Anything).Return("msg3", nil)
+	
+	// For the second round, after the error
+	mockMessages2 := []memory.Message{
+		{Role: "user", Content: userInput},
+		{Role: "assistant", Content: "I'll use the tool.", Metadata: map[string]interface{}{"tool_calls": []interface{}{}}},
+		{Role: "tool", Content: mock.Anything, Metadata: map[string]interface{}{"tool_call_id": "call1", "tool_name": "mock_tool", "error": true}},
+	}
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return(mockMessages2, nil).Once()
+	
+	// For the final response without tool calls
+	finalResponse := &models.ResponseWithFunctionCalls{
+		Text: "The tool execution failed.",
+		FinishReason: "stop",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(finalResponse, nil).Once()
+	
+	// For the final assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "The tool execution failed.", mock.Anything).Return("msg4", nil)
+
+	runOpts := &RunOptions{
+		ThreadID:       threadID,
+		Input:          userInput,
+		AvailableTools: []tools.Tool{mockTool},
+	}
+
+	// Run the agent
+	result, err := agent.Run(ctx, runOpts)
+
+	// We expect no error returned from Run itself, but the tool execution error should be handled
+	assert.NoError(t, err)
+	assert.Equal(t, "The tool execution failed.", result)
+
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+	mockTool.AssertExpectations(t)
+}
+
+// Add TestAgent_RunWithCallbacks_OnStepFinish
+func TestAgent_RunWithCallbacks_OnStepFinish(t *testing.T) {
+	agent, mockModel, mockMemory, mockTool := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-on-step-finish"
+	userInput := "Use a tool with step finish callback"
+
+	// Track step finish calls
+	stepFinishCalls := 0
+	var lastStepData *StepFinishData
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+
+	// Valid JSON arguments for the tool
+	toolCallArgs, _ := json.Marshal(map[string]interface{}{"input": "test-data"})
+
+	// Create a model response that requests the tool
+	toolCallResponse := &models.ResponseWithFunctionCalls{
+		Text: "I'll use the tool.",
+		ToolCalls: []models.ToolCall{
+			{ID: "call1", Type: "function", Function: models.FunctionCall{Name: "mock_tool", Arguments: string(toolCallArgs)}},
+		},
+		FinishReason: "tool_calls",
+	}
+
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(toolCallResponse, nil).Once()
+	
+	// Mock for adding the assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I'll use the tool.", mock.Anything).Return("msg2", nil)
+	
+	// Mock successful tool execution
+	mockTool.On("Execute", map[string]interface{}{"input": "test-data"}, mock.Anything).Return(map[string]string{"result": "tool result"}, nil).Once()
+	
+	// Mock for adding the tool message
+	mockMemory.On("AddMessage", ctx, threadID, "tool", mock.Anything, mock.Anything).Return("msg3", nil)
+	
+	// For the second round, after tool execution
+	mockMessages2 := []memory.Message{
+		{Role: "user", Content: userInput},
+		{Role: "assistant", Content: "I'll use the tool.", Metadata: map[string]interface{}{"tool_calls": []interface{}{}}},
+		{Role: "tool", Content: `{"result":"tool result"}`, Metadata: map[string]interface{}{"tool_call_id": "call1", "tool_name": "mock_tool"}},
+	}
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return(mockMessages2, nil).Once()
+	
+	// For the final response without tool calls
+	finalResponse := &models.ResponseWithFunctionCalls{
+		Text: "I used the tool successfully.",
+		FinishReason: "stop",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(finalResponse, nil).Once()
+	
+	// For the final assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "I used the tool successfully.", mock.Anything).Return("msg4", nil)
+
+	// Define the onStepFinish callback
+	onStepFinish := func(ctx context.Context, data *StepFinishData) error {
+		stepFinishCalls++
+		lastStepData = data
+		return nil
+	}
+
+	runOpts := &RunOptions{
+		ThreadID:       threadID,
+		Input:          userInput,
+		AvailableTools: []tools.Tool{mockTool},
+		OnStepFinish:   onStepFinish,
+	}
+
+	// Run the agent
+	result, err := agent.Run(ctx, runOpts)
+
+	// We expect successful execution
+	assert.NoError(t, err)
+	assert.Equal(t, "I used the tool successfully.", result)
+	
+	// Verify the callback was called once
+	assert.Equal(t, 1, stepFinishCalls)
+	
+	// Verify the data passed to the callback
+	assert.NotNil(t, lastStepData)
+	assert.Equal(t, toolCallResponse.Text, lastStepData.Text)
+	assert.Len(t, lastStepData.ToolCalls, 1)
+	assert.Equal(t, "mock_tool", lastStepData.ToolCalls[0].Function.Name)
+	assert.Contains(t, lastStepData.ToolResults, "call1")
+	
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+	mockTool.AssertExpectations(t)
+}
+
+// Add TestAgent_RunWithCallbacks_OnFinish
+func TestAgent_RunWithCallbacks_OnFinish(t *testing.T) {
+	agent, mockModel, mockMemory, _ := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-on-finish"
+	userInput := "Simple query with finish callback"
+
+	// Track finish calls
+	finishCallMade := false
+	var finishData *RunResult
+
+	// Mock MemoryProvider interactions
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+
+	// Create a simple response without tool calls
+	simpleResponse := &models.ResponseWithFunctionCalls{
+		Text: "This is a simple response.",
+		FinishReason: "stop",
+	}
+
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(simpleResponse, nil).Once()
+	
+	// Mock for adding the assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "This is a simple response.", mock.Anything).Return("msg2", nil)
+
+	// Define the onFinish callback
+	onFinish := func(ctx context.Context, data *RunResult) error {
+		finishCallMade = true
+		finishData = data
+		return nil
+	}
+
+	runOpts := &RunOptions{
+		ThreadID: threadID,
+		Input:    userInput,
+		OnFinish: onFinish,
+	}
+
+	// Run the agent
+	result, err := agent.Run(ctx, runOpts)
+
+	// We expect successful execution
+	assert.NoError(t, err)
+	assert.Equal(t, "This is a simple response.", result)
+	
+	// Verify the callback was called
+	assert.True(t, finishCallMade)
+	
+	// Verify the data passed to the callback
+	assert.NotNil(t, finishData)
+	assert.Equal(t, "This is a simple response.", finishData.Response)
+	assert.Equal(t, 0, finishData.NumberOfSteps)
+	
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+}
+
+// TestActorCallback tests the ActorCallbackMessage with the actor system
+func TestActorCallback(t *testing.T) {
+	// Create a new actor system
+	system := actor.NewActorSystem()
+	
+	// Setup test components
+	agent, mockModel, mockMemory, mockTool := setupTestAgent(t)
+	ctx := context.Background()
+	threadID := "thread-actor-callback"
+	userInput := "Use a tool with actor callback"
+	
+	// Create actor props and spawn actor
+	props := NewAgentActor(agent)
+	pid := system.Root.Spawn(props)
+	
+	// Set up callback tracking
+	stepFinishCalled := false
+	finishCalled := false
+	var resultText string
+	
+	// Setup run options with callbacks
+	runOpts := &RunOptions{
+		ThreadID:            threadID,
+		Input:               userInput,
+		AvailableTools:      []tools.Tool{mockTool},
+		MaxConsecutiveCalls: 3,
+		OnStepFinish: func(data StepFinishData) {
+			stepFinishCalled = true
+		},
+		OnFinish: func(data FinishData) {
+			finishCalled = true
+		},
+	}
+	
+	// Mock MemoryProvider interactions for the test
+	mockMemory.On("AddMessage", ctx, threadID, "user", userInput, mock.Anything).Return("msg1", nil)
+	mockMemory.On("GetMessages", ctx, threadID, 100, 0).Return([]memory.Message{
+		{Role: "user", Content: userInput},
+	}, nil).Once()
+	
+	// Mock ModelProvider to return a simple response without tool calls
+	modelResponse := &models.ResponseWithFunctionCalls{
+		Text:         "Actor callback test response",
+		FinishReason: "stop",
+	}
+	mockModel.On("GenerateWithFunctionCalls", mock.Anything, mock.Anything, mock.Anything).Return(modelResponse, nil).Once()
+	
+	// Mock for adding the assistant message
+	mockMemory.On("AddMessage", ctx, threadID, "assistant", "Actor callback test response", mock.Anything).Return("msg2", nil)
+	
+	// Send the callback message to the actor
+	callbackMsg := &ActorCallbackMessage{
+		RunOptions: runOpts,
+		Context:    ctx,
+	}
+	
+	// Request response via actor message
+	future := system.Root.RequestFuture(pid, callbackMsg, 5*time.Second)
+	result, err := future.Result()
+	
+	// Assertions
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	resultText, ok := result.(string)
+	assert.True(t, ok)
+	assert.Equal(t, "Actor callback test response", resultText)
+	
+	// Give some time for callbacks to execute (in real system this would be synchronous)
+	time.Sleep(100 * time.Millisecond)
+	
+	// Verify callbacks were called
+	assert.True(t, finishCalled, "onFinish should have been called")
+	
+	// Verify mocks
+	mockModel.AssertExpectations(t)
+	mockMemory.AssertExpectations(t)
+}
+
+

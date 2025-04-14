@@ -428,6 +428,14 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 			}
 		}
 
+		// Create a map for tool results to pass to the callback
+		toolResultsMap := make(map[string]interface{})
+		for i, tc := range response.ToolCalls {
+			if i < len(toolResultsData) {
+				toolResultsMap[tc.ID] = toolResultsData[i]
+			}
+		}
+
 		currentStep := Step{
 			Text:        response.Text,   // The raw string response from the model for this step
 			ToolCalls:   localToolCalls,  // Use converted local type
@@ -435,11 +443,30 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 		}
 		steps = append(steps, currentStep)
 
+		// Call the step finish callback if provided
+		if opts.OnStepFinish != nil {
+			// Prepare step finish data
+			stepData := StepFinishData{
+				Text:        response.Text,
+				ToolCalls:   response.ToolCalls, // Use the original ToolCalls from the response
+				ToolResults: toolResultsMap,     // Map of tool call IDs to results
+				StepIndex:   callCount,
+				TotalSteps:  maxConsecutiveCalls,
+				Error:       nil,
+			}
+
+			// Call the callback with context
+			if err := opts.OnStepFinish(ctx, &stepData); err != nil {
+				a.StateManager.SetError(fmt.Sprintf("step finish callback error: %v", err))
+				// Note: we continue execution even if callback errors
+			}
+		}
+
 		// Check if max consecutive calls reached *after* processing tool calls for this iteration
 		if callCount == maxConsecutiveCalls-1 {
 			log.Printf("Reached maximum function call attempts: %d", maxConsecutiveCalls)
-			// Loop will terminate, finalResponse might still be empty
-			break
+			a.StateManager.SetError(fmt.Sprintf("exceeded maximum consecutive tool calls: %d", maxConsecutiveCalls))
+			return lastAssistantResponseText, fmt.Errorf("exceeded maximum consecutive tool calls: %d", maxConsecutiveCalls)
 		}
 	}
 
@@ -447,6 +474,38 @@ func (a *Agent) Run(ctx context.Context, opts *RunOptions) (string, error) {
 	// return the last assistant response text we captured.
 	if finalResponse == "" {
 		finalResponse = lastAssistantResponseText
+	}
+
+	// Call the finish callback if provided
+	if opts.OnFinish != nil {
+		// Convert FinishData to RunResult
+		runResult := &RunResult{
+			Response:      finalResponse,
+			NumberOfSteps: len(steps),
+			Steps:         steps,
+			Error:         nil,
+		}
+
+		// Get conversation history if available
+		if msgs, err := a.MemoryProvider.GetMessages(ctx, opts.ThreadID, 100, 0); err == nil {
+			// Convert memory.Message to agent.Message
+			conversation := make([]Message, len(msgs))
+			for i, msg := range msgs {
+				conversation[i] = Message{
+					ID:        msg.ID,
+					Role:      msg.Role,
+					Content:   msg.Content,
+					CreatedAt: msg.CreatedAt.Unix(),
+				}
+			}
+			runResult.Conversation = conversation
+		}
+
+		// Call the callback with context
+		if err := opts.OnFinish(ctx, runResult); err != nil {
+			a.StateManager.SetError(fmt.Sprintf("finish callback error: %v", err))
+			// Note: this doesn't affect the return value
+		}
 	}
 
 	// 任务完成，更新状态
@@ -776,6 +835,12 @@ type AgentActor struct {
 	agent *Agent
 }
 
+// ActorCallbackMessage defines a message for handling agent callbacks in the actor system
+type ActorCallbackMessage struct {
+	RunOptions *RunOptions
+	Context    context.Context
+}
+
 // Receive 处理接收到的消息
 func (a *AgentActor) Receive(context actor.Context) {
 	switch msg := context.Message().(type) {
@@ -792,6 +857,14 @@ func (a *AgentActor) Receive(context actor.Context) {
 		}
 	case *StreamMessage:
 		response, err := a.agent.Stream(msg.Messages, msg.Options)
+		if err != nil {
+			context.Respond(err)
+			return
+		}
+		context.Respond(response)
+	case *ActorCallbackMessage:
+		// Handle callback request through actor system
+		response, err := a.agent.RunWithCallbacks(msg.Context, msg.RunOptions)
 		if err != nil {
 			context.Respond(err)
 			return
@@ -1338,26 +1411,27 @@ func (a *Agent) StreamWithFunctionCalls(ctx context.Context, prompt string) (<-c
 
 // StepFinishData 包含步骤完成时的数据
 type StepFinishData struct {
-	Text        string        `json:"text"`
-	ToolCalls   []ToolCall    `json:"tool_calls,omitempty"`
-	ToolResults []interface{} `json:"tool_results,omitempty"`
-	StepIndex   int           `json:"step_index"`
-	TotalSteps  int           `json:"total_steps"`
+	Text        string                 `json:"text"`
+	ToolCalls   []models.ToolCall      `json:"tool_calls,omitempty"`
+	ToolResults map[string]interface{} `json:"tool_results,omitempty"`
+	StepIndex   int                    `json:"step_index"`
+	TotalSteps  int                    `json:"total_steps"`
+	Error       error                  `json:"error,omitempty"`
 }
 
-// FinishData 包含执行完成时的数据
+// FinishData 包含执行完成时的数据 (Legacy - kept for backward compatibility)
 type FinishData struct {
-	Text          string `json:"text"`
+	Text          string `json:"text"`           // For backward compatibility
+	FinalResponse string `json:"final_response"` // New field
 	Steps         []Step `json:"steps,omitempty"`
 	FinishReason  string `json:"finish_reason"`
 	Usage         Usage  `json:"usage"`
 	ToolCallCount int    `json:"tool_call_count"`
+	Error         error  `json:"error,omitempty"`
 }
 
 // 在Run方法中添加回调函数支持
-func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
-	onStepFinish func(*StepFinishData),
-	onFinish func(*FinishData)) (string, error) {
+func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions) (string, error) {
 	if opts == nil {
 		return "", errors.New("options cannot be nil")
 	}
@@ -1598,6 +1672,14 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 			}
 		}
 
+		// Create a map for tool results to pass to the callback
+		toolResultsMap := make(map[string]interface{})
+		for i, tc := range response.ToolCalls {
+			if i < len(toolResultsData) {
+				toolResultsMap[tc.ID] = toolResultsData[i]
+			}
+		}
+
 		currentStep := Step{
 			Text:        response.Text,   // The raw string response from the model for this step
 			ToolCalls:   localToolCalls,  // Use converted local type
@@ -1605,22 +1687,30 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 		}
 		steps = append(steps, currentStep)
 
-		if onStepFinish != nil {
-			stepData := &StepFinishData{
-				Text:        response.Text,   // Pass the raw string response
-				ToolCalls:   localToolCalls,  // Pass the converted local type
-				ToolResults: toolResultsData, // Pass the collected raw results/errors from this step
+		// Call the step finish callback if provided
+		if opts.OnStepFinish != nil {
+			// Prepare step finish data
+			stepData := StepFinishData{
+				Text:        response.Text,
+				ToolCalls:   response.ToolCalls, // Use the original ToolCalls from the response
+				ToolResults: toolResultsMap,     // Map of tool call IDs to results
 				StepIndex:   callCount,
-				TotalSteps:  -1,
+				TotalSteps:  maxConsecutiveCalls,
+				Error:       nil,
 			}
-			onStepFinish(stepData)
+
+			// Call the callback with context
+			if err := opts.OnStepFinish(ctx, &stepData); err != nil {
+				a.StateManager.SetError(fmt.Sprintf("step finish callback error: %v", err))
+				// Note: we continue execution even if callback errors
+			}
 		}
 
-		// Check if max consecutive calls reached
+		// Check if max consecutive calls reached *after* processing tool calls for this iteration
 		if callCount == maxConsecutiveCalls-1 {
 			log.Printf("Reached maximum function call attempts: %d", maxConsecutiveCalls)
-			// Loop will terminate, finalResponse might still be empty
-			break
+			a.StateManager.SetError(fmt.Sprintf("exceeded maximum consecutive tool calls: %d", maxConsecutiveCalls))
+			return lastAssistantResponseText, fmt.Errorf("exceeded maximum consecutive tool calls: %d", maxConsecutiveCalls)
 		}
 	}
 
@@ -1630,33 +1720,49 @@ func (a *Agent) RunWithCallbacks(ctx context.Context, opts *RunOptions,
 		finalResponse = lastAssistantResponseText
 	}
 
+	// Call the finish callback if provided
+	if opts.OnFinish != nil {
+		// Convert FinishData to RunResult
+		runResult := &RunResult{
+			Response:      finalResponse,
+			NumberOfSteps: len(steps),
+			Steps:         steps,
+			Error:         nil,
+		}
+
+		// Get conversation history if available
+		if msgs, err := a.MemoryProvider.GetMessages(ctx, opts.ThreadID, 100, 0); err == nil {
+			// Convert memory.Message to agent.Message
+			conversation := make([]Message, len(msgs))
+			for i, msg := range msgs {
+				conversation[i] = Message{
+					ID:        msg.ID,
+					Role:      msg.Role,
+					Content:   msg.Content,
+					CreatedAt: msg.CreatedAt.Unix(),
+				}
+			}
+			runResult.Conversation = conversation
+		}
+
+		// Call the callback with context
+		if err := opts.OnFinish(ctx, runResult); err != nil {
+			a.StateManager.SetError(fmt.Sprintf("finish callback error: %v", err))
+			// Note: this doesn't affect the return value
+		}
+	}
+
 	// 任务完成，更新状态
 	a.StateManager.CompleteTask(taskID)
 	a.StateManager.SetIdle()
-
-	// 调用完成回调
-	if onFinish != nil {
-		finishData := &FinishData{
-			Text:          finalResponse,
-			Steps:         steps,
-			FinishReason:  "stop",
-			ToolCallCount: toolCallCount,
-			Usage: Usage{
-				PromptTokens:     100, // 这里应该从模型获取实际使用情况
-				CompletionTokens: 50,  // 这里应该从模型获取实际使用情况
-				TotalTokens:      150, // 这里应该从模型获取实际使用情况
-			},
-		}
-		onFinish(finishData)
-	}
 
 	return finalResponse, nil
 }
 
 // StreamWithCallbacks 实现带回调的流式响应
-func (a *Agent) StreamWithCallbacks(messages []Message, options *StreamOptions,
-	onStepFinish func(*StepFinishData),
-	onFinish func(*FinishData)) (*StreamResponse, error) {
+func (a *Agent) StreamWithCallbacks(ctx context.Context, messages []Message, options *StreamOptions,
+	onStepFinish func(context.Context, *StepFinishData) error,
+	onFinish func(context.Context, *RunResult) error) (*StreamResponse, error) {
 	if len(messages) == 0 {
 		return nil, errors.New("empty messages")
 	}
@@ -1666,6 +1772,10 @@ func (a *Agent) StreamWithCallbacks(messages []Message, options *StreamOptions,
 			MaxSteps:    1,
 			Temperature: 0.7,
 		}
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	// 将Agent消息转换为模型消息
@@ -1708,16 +1818,12 @@ func (a *Agent) StreamWithCallbacks(messages []Message, options *StreamOptions,
 
 			// 调用完成回调
 			if onFinish != nil {
-				finishData := &FinishData{
-					Text:         fmt.Sprintf("Error: %v", err),
-					FinishReason: "error",
-					Usage: Usage{
-						PromptTokens:     0,
-						CompletionTokens: 0,
-						TotalTokens:      0,
-					},
+				runResult := &RunResult{
+					Response:      fmt.Sprintf("Error: %v", err),
+					NumberOfSteps: 0,
+					Error:         err,
 				}
-				onFinish(finishData)
+				_ = onFinish(ctx, runResult) // Ignore callback errors here
 			}
 			return
 		}
@@ -1734,16 +1840,12 @@ func (a *Agent) StreamWithCallbacks(messages []Message, options *StreamOptions,
 
 				// 调用完成回调
 				if onFinish != nil {
-					finishData := &FinishData{
-						Text:         fullResponse.String(),
-						FinishReason: "canceled",
-						Usage: Usage{
-							PromptTokens:     100,
-							CompletionTokens: stepIndex * 10,
-							TotalTokens:      100 + stepIndex*10,
-						},
+					runResult := &RunResult{
+						Response:      fullResponse.String(),
+						NumberOfSteps: stepIndex,
+						Error:         nil,
 					}
-					onFinish(finishData)
+					_ = onFinish(ctx, runResult) // Ignore callback errors
 				}
 				return
 			case chunk, ok := <-stream:
@@ -1772,12 +1874,12 @@ func (a *Agent) StreamWithCallbacks(messages []Message, options *StreamOptions,
 
 					// 调用完成回调
 					if onFinish != nil {
-						finishData := &FinishData{
-							Text:         responseText,
-							FinishReason: "stop",
-							Usage:        finishInfo.Usage,
+						runResult := &RunResult{
+							Response:      responseText,
+							NumberOfSteps: stepIndex,
+							Error:         nil,
 						}
-						onFinish(finishData)
+						_ = onFinish(ctx, runResult) // Ignore callback errors
 					}
 
 					// 设置状态为空闲
@@ -1797,8 +1899,9 @@ func (a *Agent) StreamWithCallbacks(messages []Message, options *StreamOptions,
 						Text:       chunk,
 						StepIndex:  stepIndex,
 						TotalSteps: -1, // 流式响应无法预知总步骤数
+						Error:      nil,
 					}
-					onStepFinish(stepData)
+					_ = onStepFinish(ctx, stepData) // Ignore callback errors
 					stepIndex++
 				}
 			}

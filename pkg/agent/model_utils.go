@@ -18,6 +18,18 @@ type RunOptions struct {
 	AvailableTools      []tools.Tool
 	MaxConsecutiveCalls int
 	MaxTokens           int
+	// Callback functions with context-aware signatures
+	OnStepFinish func(context.Context, *StepFinishData) error // Called when a step finishes
+	OnFinish     func(context.Context, *RunResult) error      // Called when execution finishes
+}
+
+// RunResult contains the final execution results for the OnFinish callback
+type RunResult struct {
+	Response      string    `json:"response"`               // Final response text
+	NumberOfSteps int       `json:"number_of_steps"`        // Number of steps executed
+	Steps         []Step    `json:"steps,omitempty"`        // Step details
+	Conversation  []Message `json:"conversation,omitempty"` // Conversation history
+	Error         error     `json:"error,omitempty"`        // Any error that occurred
 }
 
 // FunctionDefinition 表示工具的函数定义
