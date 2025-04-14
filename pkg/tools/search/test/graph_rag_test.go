@@ -6,11 +6,13 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
-	"github.com/louloulin/gostra/pkg/actor"
+	pa "github.com/asynkron/protoactor-go/actor"
 	"github.com/louloulin/gostra/pkg/agent"
 	"github.com/louloulin/gostra/pkg/memory"
 	"github.com/louloulin/gostra/pkg/models/openai"
+	"github.com/louloulin/gostra/pkg/tools"
 	"github.com/louloulin/gostra/pkg/tools/document"
 	"github.com/louloulin/gostra/pkg/tools/search"
 )
@@ -37,11 +39,9 @@ func TestGraphRAGWithActorSystem(t *testing.T) {
 	// Create context
 	ctx := context.Background()
 
-	// Initialize Actor system
-	system := actor.NewActorSystem(&actor.Configuration{
-		Agents: make(map[string]interface{}),
-		Tools:  make(map[string]interface{}),
-	})
+	// Initialize Actor system using protoactor-go directly
+	protoSystem := pa.NewActorSystem()
+	rootCtx := protoSystem.Root
 
 	// Create OpenAI provider
 	openaiProvider, err := openai.NewOpenAIProvider(&openai.Options{
@@ -151,11 +151,11 @@ func TestGraphRAGWithActorSystem(t *testing.T) {
 	}
 
 	// Create Graph RAG agent
-	graphRAGAgent, err := agent.NewAgent(&agent.AgentConfig{
+	graphRAGAgent, err := agent.NewAgent(&agent.Options{
 		Name:          "graph-rag-agent",
 		ModelProvider: openaiProvider,
-		Tools:         []agent.Tool{graphRAGTool, documentSearchTool},
-		Instructions: `You are an assistant that uses knowledge graphs to answer questions.
+		Tools:         []tools.Tool{graphRAGTool, documentSearchTool},
+		SystemPrompt: `You are an assistant that uses knowledge graphs to answer questions.
 Graph RAG builds a knowledge graph from document chunks and uses PageRank to find the most relevant information.
 Please format your answers as follows:
 
@@ -169,12 +169,30 @@ Keep each section brief and focus on the most important points.`,
 		t.Fatalf("Failed to create agent: %v", err)
 	}
 
-	// Register agent
-	system.RegisterAgent("graph-rag-agent", graphRAGAgent)
+	// Convert tools map to slice for ActorAgentOptions
+	toolsSlice := make([]tools.Tool, 0, len(graphRAGAgent.Tools))
+	for _, tool := range graphRAGAgent.Tools {
+		toolsSlice = append(toolsSlice, tool)
+	}
 
-	// Start actor system
-	system.Start()
-	defer system.Stop()
+	// Create Graph RAG agent actor props
+	agentProps, err := agent.NewActorAgent(&agent.ActorAgentOptions{
+		ID:             graphRAGAgent.ID,
+		Name:           graphRAGAgent.Name,
+		SystemPrompt:   graphRAGAgent.SystemPrompt,
+		ModelProvider:  graphRAGAgent.ModelProvider,
+		MemoryProvider: graphRAGAgent.MemoryProvider,
+		Tools:          toolsSlice, // Use the converted slice
+		MaxTokens:      graphRAGAgent.MaxTokens,
+		ActorSystem:    protoSystem,
+		RootContext:    rootCtx,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create actor agent props: %v", err)
+	}
+
+	// Spawn the agent actor
+	agentPID := rootCtx.Spawn(agentProps)
 
 	// Sample document content
 	sampleDocument := `# Urban Development: A Case Study
@@ -256,21 +274,21 @@ By 2000, Riverdale had partially achieved economic transition, with a stabilized
 		t.Fatalf("Failed to add document: %v", err)
 	}
 
-	// Process document
-	doc, err := document.NewProcessedDocument()
-	if err != nil {
-		t.Fatalf("Failed to create document processor: %v", err)
+	// Chunk the document using the chunker tool
+	chunkParams := map[string]interface{}{
+		"content":  sampleDocument,
+		"strategy": string(document.StrategyRecursive), // Use string representation
+		"size":     500.0,
+		"overlap":  100.0,
 	}
-
-	err = doc.LoadFromString(sampleDocument)
-	if err != nil {
-		t.Fatalf("Failed to load document: %v", err)
-	}
-
-	// Chunk the document
-	chunks, err := documentChunker.Chunk(doc, 500, 100)
+	chunkResult, err := documentChunker.Execute(chunkParams, nil)
 	if err != nil {
 		t.Fatalf("Failed to chunk document: %v", err)
+	}
+
+	chunks, ok := chunkResult.([]*document.DocumentChunk)
+	if !ok {
+		t.Fatalf("Unexpected type returned from document chunker: %T", chunkResult)
 	}
 
 	// Add document ID and metadata to chunks
@@ -318,24 +336,49 @@ By 2000, Riverdale had partially achieved economic transition, with a stabilized
 				"method":    "simple",
 			}
 
-			// Execute query through agent system
-			response, err := system.SendAndReceive(ctx, "graph-rag-agent", "Execute", "graph_rag", params)
+			// Execute query through agent actor
+			// Create a message for executing the tool
+			executeMsg := &agent.ExecuteToolMessage{
+				ToolCallID: "test-call-" + tc.name, // Generate a unique ID
+				Parameters: params,
+				// ThreadID can be added if needed
+			}
+
+			future := rootCtx.RequestFuture(agentPID, executeMsg, 1*time.Minute) // Use appropriate timeout
+			response, err := future.Result()
 			if err != nil {
-				t.Fatalf("Failed to execute query: %v", err)
+				t.Fatalf("Failed to execute tool query: %v", err)
 			}
 
 			// Format prompt with graph results
 			prompt := formatGraphResults(tc.query, response)
 
-			// Generate final answer through agent system
-			finalResponse, err := system.SendAndReceive(ctx, "graph-rag-agent", "Generate", prompt, nil)
+			// Generate final answer through agent actor
+			// Create a message for generating the response
+			generateMsg := &agent.AgentGenerateMessage{
+				Messages: []agent.Message{{
+					Role:    "user",
+					Content: prompt,
+				}},
+				// Options can be nil or configured
+			}
+
+			future = rootCtx.RequestFuture(agentPID, generateMsg, 1*time.Minute) // Use appropriate timeout
+			finalResponse, err := future.Result()
 			if err != nil {
 				t.Fatalf("Failed to generate answer: %v", err)
 			}
 
-			finalText, ok := finalResponse.(string)
-			if !ok {
-				t.Fatalf("Unexpected response type: %T", finalResponse)
+			// Assuming the response is now an AgentGenerateResponse or similar
+			var finalText string
+			if genResp, ok := finalResponse.(*agent.AgentGenerateResponse); ok {
+				if len(genResp.Messages) > 0 {
+					finalText = genResp.Messages[0].Content
+				} else {
+					finalText = genResp.Text // Fallback if Messages is empty
+				}
+			} else {
+				t.Fatalf("Unexpected response type for Generate: %T", finalResponse)
 			}
 
 			// Log the answer (for visual inspection during test)
