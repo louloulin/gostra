@@ -53,9 +53,12 @@ func TestGraphRAGWithActorSystem(t *testing.T) {
 	}
 
 	// Create embedding provider
-	embeddingProvider := &search.OpenAIEmbeddingProvider{
+	embeddingProvider, err := search.NewOpenAIEmbeddingProvider(search.OpenAIEmbeddingOptions{
 		APIKey: openaiKey,
-		Model:  "text-embedding-3-small",
+		Model:  search.ModelTextEmbedding3Small,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create embedding provider: %v", err)
 	}
 
 	// Create PostgreSQL vector storage

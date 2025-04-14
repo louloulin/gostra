@@ -126,7 +126,7 @@ func runPostgresWorkflowExample(stateStore workflow.WorkflowStateStore) error {
 		fmt.Println("Workflow is suspended. Resuming...")
 
 		// Resume the workflow with the "approval" event and additional data
-		err = eventWorkflow.SendEvent(instanceID, "approval", map[string]interface{}{
+		err = eventWorkflow.HandleEvent(context.Background(), instanceID, "approval", map[string]interface{}{
 			"approved": true,
 			"notes":    "Approved by PostgreSQL example",
 		})

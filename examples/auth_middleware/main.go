@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/louloulin/gostra/pkg"
 	"github.com/louloulin/gostra/pkg/api"
 	"github.com/louloulin/gostra/pkg/auth/middleware"
 )
@@ -49,7 +50,7 @@ func main() {
 
 	// Create a simple placeholder Gostra instance (would be your real instance in production)
 	// For a complete example, you would initialize Gostra with your agents, models, etc.
-	gostra := &struct{}{}
+	var gostra *pkg.Gostra // Use the correct type, even if nil for this example
 
 	server := api.NewServer(gostra, serverOptions)
 
