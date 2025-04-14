@@ -32,7 +32,7 @@ func main() {
 	}
 
 	// 创建OpenAI模型提供者
-	modelProvider, err := openai.NewOpenAIProvider(&openai.OpenAIOptions{
+	modelProvider, err := openai.NewOpenAIProvider(&openai.Options{
 		APIKey: apiKey,
 		Model:  "gpt-3.5-turbo",
 	})
