@@ -21,10 +21,10 @@ type LoopStep struct {
 	AccumulateResults bool              // Whether to accumulate results from all iterations
 }
 
-// LoopWorkflow extends ConditionalWorkflow with looping functionality
+// LoopWorkflow extends ConditionalWorkflow with looping capabilities
 type LoopWorkflow struct {
-	ConditionalWorkflow // Embed ConditionalWorkflow for base functionality
-	loops               map[string]*LoopStep
+	*ConditionalWorkflow // Embed ConditionalWorkflow as a pointer
+	loopSteps            map[string]*LoopStep
 }
 
 // NewLoopWorkflow creates a new workflow with looping support
@@ -35,14 +35,14 @@ func NewLoopWorkflow(opts ParallelWorkflowOptions) (*LoopWorkflow, error) {
 	}
 
 	return &LoopWorkflow{
-		ConditionalWorkflow: *base,
-		loops:               make(map[string]*LoopStep),
+		ConditionalWorkflow: base, // Assign the pointer directly
+		loopSteps:           make(map[string]*LoopStep),
 	}, nil
 }
 
 // AddLoopStep adds a looping step to the workflow
 func (w *LoopWorkflow) AddLoopStep(step *LoopStep) *LoopWorkflow {
-	w.loops[step.ID] = step
+	w.loopSteps[step.ID] = step
 
 	// Set default max iterations if not specified
 	if step.MaxIterations <= 0 {

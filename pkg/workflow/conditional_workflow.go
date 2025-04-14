@@ -22,8 +22,8 @@ type ConditionalStep struct {
 
 // ConditionalWorkflow extends ParallelWorkflow with conditional branching
 type ConditionalWorkflow struct {
-	ParallelWorkflow // Embed ParallelWorkflow for base functionality
-	conditions       map[string]*ConditionalStep
+	*ParallelWorkflow // Embed ParallelWorkflow as a pointer
+	conditions        map[string]*ConditionalStep
 }
 
 // NewConditionalWorkflow creates a new workflow with conditional branching support
@@ -34,7 +34,7 @@ func NewConditionalWorkflow(opts ParallelWorkflowOptions) (*ConditionalWorkflow,
 	}
 
 	return &ConditionalWorkflow{
-		ParallelWorkflow: *base,
+		ParallelWorkflow: base, // Assign the pointer directly
 		conditions:       make(map[string]*ConditionalStep),
 	}, nil
 }

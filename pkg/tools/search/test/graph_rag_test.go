@@ -39,7 +39,8 @@ func TestGraphRAGWithActorSystem(t *testing.T) {
 
 	// Initialize Actor system
 	system := actor.NewActorSystem(&actor.Configuration{
-		SystemName: "graph-rag-test",
+		Agents: make(map[string]interface{}),
+		Tools:  make(map[string]interface{}),
 	})
 
 	// Create OpenAI provider

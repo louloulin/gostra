@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -26,9 +27,9 @@ func (s *mockSpan) IsRecording() bool                               { return tru
 func (s *mockSpan) RecordError(err error, opts ...trace.EventOption) {
 	s.errors = append(s.errors, err)
 }
-func (s *mockSpan) SpanContext() trace.SpanContext                      { return trace.SpanContext{} }
-func (s *mockSpan) SetStatus(code trace.StatusCode, description string) {}
-func (s *mockSpan) SetName(name string)                                 { s.name = name }
+func (s *mockSpan) SpanContext() trace.SpanContext                { return trace.SpanContext{} }
+func (s *mockSpan) SetStatus(code codes.Code, description string) {}
+func (s *mockSpan) SetName(name string)                           { s.name = name }
 func (s *mockSpan) SetAttributes(kv ...attribute.KeyValue) {
 	if s.attributes == nil {
 		s.attributes = make(map[string]interface{})
@@ -124,7 +125,12 @@ func TestActorTracer(t *testing.T) {
 	// Test workflow tracing
 	mockTracer.spans = nil
 	workflowID := "test_workflow"
-	ctx, span = tracer.TraceWorkflow(ctx, workflowID)
+	var traceSpan trace.Span // Declare traceSpan
+	ctx, traceSpan = tracer.TraceWorkflow(ctx, workflowID)
+	span, ok := traceSpan.(*mockSpan) // Type assertion
+	if !ok {
+		t.Fatalf("TraceWorkflow did not return a *mockSpan")
+	}
 
 	if len(mockTracer.spans) != 1 {
 		t.Fatalf("Expected 1 span, got %d", len(mockTracer.spans))

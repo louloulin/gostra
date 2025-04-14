@@ -67,7 +67,7 @@ func TestParallelWorkflowBasic(t *testing.T) {
 
 	// Create a simple manual implementation of a parallel workflow
 	manualParallelWorkflow := &struct {
-		Workflow
+		*Workflow     // Embed Workflow as a pointer
 		parallelSteps []*Step
 		maxParallel   int
 	}{
@@ -81,8 +81,8 @@ func TestParallelWorkflowBasic(t *testing.T) {
 		t.Fatalf("Failed to create base workflow: %v", err)
 	}
 
-	// Copy the baseWorkflow fields to the embedded Workflow
-	manualParallelWorkflow.Workflow = *baseWorkflow
+	// Assign the pointer directly
+	manualParallelWorkflow.Workflow = baseWorkflow
 
 	// Override the Run method to do parallel execution
 	oldRun := manualParallelWorkflow.Workflow.Run

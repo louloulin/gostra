@@ -22,10 +22,10 @@ type OutputMappingDef struct {
 	TargetKey string // Key to use in parent workflow's context
 }
 
-// NestedWorkflow extends LoopWorkflow with nested workflow support
+// NestedWorkflow extends LoopWorkflow to support nested workflows
 type NestedWorkflow struct {
-	LoopWorkflow    // Embed LoopWorkflow for base functionality
-	nestedWorkflows map[string]*WorkflowRefStep
+	*LoopWorkflow // Embed LoopWorkflow as a pointer
+	nestedSteps   map[string]*WorkflowRefStep
 }
 
 // NewNestedWorkflow creates a new workflow with nested workflow support
@@ -36,14 +36,14 @@ func NewNestedWorkflow(opts ParallelWorkflowOptions) (*NestedWorkflow, error) {
 	}
 
 	return &NestedWorkflow{
-		LoopWorkflow:    *base,
-		nestedWorkflows: make(map[string]*WorkflowRefStep),
+		LoopWorkflow: base, // Assign the pointer directly
+		nestedSteps:  make(map[string]*WorkflowRefStep),
 	}, nil
 }
 
 // AddNestedWorkflow adds a nested workflow step
 func (w *NestedWorkflow) AddNestedWorkflow(step *WorkflowRefStep) *NestedWorkflow {
-	w.nestedWorkflows[step.ID] = step
+	w.nestedSteps[step.ID] = step
 
 	// Create a regular step that will handle executing the nested workflow
 	workflowStep := &Step{
